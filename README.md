@@ -7,7 +7,7 @@
 ## Python Client
 
 This is the official asynchronous Python client for interacting with the Olarm Public API.
-For more information about Olarm, visit [https://www.olarm.com](https://www.olarm.com).
+For more information about our Olarm Public API, please see our official API documentation on our platform.
 
 ## Features
 
@@ -44,6 +44,9 @@ The repository includes example scripts that demonstrate how to use the library:
 ```bash
 # Run the fetch devices example
 python examples/fetch_devices.py --api-token YOUR_API_TOKEN
+
+# Run the fetch devices example
+python examples/fetch_device.py --api-token YOUR_API_TOKEN --device-id DEVICE_ID
 
 # Run the MQTT events listener example
 python examples/subscribe_device_mqtt.py --api-token YOUR_API_TOKEN --user-id YOUR_USER_ID
