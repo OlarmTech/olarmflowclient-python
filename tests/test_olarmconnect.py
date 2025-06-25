@@ -1,5 +1,5 @@
 """
-Tests for the unified OlarmConnect class combining API and MQTT functionality.
+Tests for the unified OlarmFlowClient class combining API and MQTT functionality.
 """
 
 import json
@@ -7,7 +7,7 @@ import pytest
 import ssl
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from olarmconnect import OlarmConnect, OlarmConnectApiError
+from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError
 
 
 @pytest.fixture
@@ -34,12 +34,12 @@ def user_id():
     return "test_user_id"
 
 
-class TestOlarmConnect:
-    """Test the unified OlarmConnect class."""
+class TestOlarmFlowClient:
+    """Test the unified OlarmFlowClient class."""
 
     def test_init_regular_token(self, access_token):
         """Test initialization with a regular access token."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         assert client._access_token == access_token
         assert client._expires_at is None
         assert client._is_jwt_token is False
@@ -48,7 +48,7 @@ class TestOlarmConnect:
 
     def test_init_jwt_token(self, jwt_token):
         """Test initialization with a JWT token."""
-        client = OlarmConnect(jwt_token, expires_at=1234567890)
+        client = OlarmFlowClient(jwt_token, expires_at=1234567890)
         assert client._access_token == jwt_token
         assert client._expires_at == 1234567890
         assert client._is_jwt_token is True
@@ -60,7 +60,7 @@ class TestOlarmConnect:
             mock_session_instance = AsyncMock()
             mock_session.return_value = mock_session_instance
 
-            async with OlarmConnect(access_token) as client:
+            async with OlarmFlowClient(access_token) as client:
                 assert client._api_session is not None
                 mock_session.assert_called_once()
 
@@ -70,7 +70,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_api_connect_and_close(self, access_token):
         """Test API session connect and close methods."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
 
         with patch("aiohttp.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
@@ -85,14 +85,14 @@ class TestOlarmConnect:
             assert client._api_session is None
 
     def test_api_error(self):
-        """Test OlarmConnectApiError initialization and string representation."""
-        error = OlarmConnectApiError("Test error", 400, "Bad request")
+        """Test OlarmFlowClientApiError initialization and string representation."""
+        error = OlarmFlowClientApiError("Test error", 400, "Bad request")
         assert "API Error 400: Test error - Bad request" in str(error)
         assert error.status_code == 400
         assert error.response_text == "Bad request"
 
         # Test without status code
-        simple_error = OlarmConnectApiError("Simple error")
+        simple_error = OlarmFlowClientApiError("Simple error")
         assert str(simple_error) == "Simple error"
 
     # Note: Direct _api_make_request tests removed due to complex aiohttp mocking requirements
@@ -101,7 +101,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_update_access_token(self, access_token):
         """Test updating access token."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         new_token = "new_test_token"
         new_expires_at = 9876543210
 
@@ -119,7 +119,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_get_devices(self, access_token):
         """Test get_devices method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"devices": [{"id": "device1"}, {"id": "device2"}]}
 
         with patch.object(
@@ -142,7 +142,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_get_device(self, access_token, device_id):
         """Test get_device method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"device": {"id": device_id}}
 
         with patch.object(
@@ -160,7 +160,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_send_device_area_arm(self, access_token, device_id):
         """Test send_device_area_arm method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"success": True}
 
         with patch.object(
@@ -171,10 +171,10 @@ class TestOlarmConnect:
             assert result == expected_result
             mock_action.assert_called_once_with(device_id, "area-arm", 1)
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_start_mqtt(self, mock_mqtt_client, access_token, user_id):
         """Test start_mqtt method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -194,10 +194,10 @@ class TestOlarmConnect:
         mock_client_instance.connect_async.assert_called_once()
         mock_client_instance.loop_start.assert_called_once()
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_stop_mqtt(self, mock_mqtt_client, access_token, user_id):
         """Test stop_mqtt method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -210,12 +210,12 @@ class TestOlarmConnect:
         mock_client_instance.loop_stop.assert_called_once()
         mock_client_instance.disconnect.assert_called_once()
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_subscribe_to_device(
         self, mock_mqtt_client, access_token, user_id, device_id
     ):
         """Test subscribe_to_device method."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_client_instance.is_connected.return_value = True
         mock_mqtt_client.return_value = mock_client_instance
@@ -230,12 +230,12 @@ class TestOlarmConnect:
         assert client._mqtt_callbacks[expected_topic] == callback
         mock_client_instance.subscribe.assert_called_with(expected_topic)
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_subscribe_when_disconnected(
         self, mock_mqtt_client, access_token, user_id
     ):
         """Test MQTT subscription when client is disconnected."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_client_instance.is_connected.return_value = False
         mock_mqtt_client.return_value = mock_client_instance
@@ -250,10 +250,10 @@ class TestOlarmConnect:
         assert client._mqtt_callbacks[topic] == callback
         mock_client_instance.subscribe.assert_not_called()
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_connect(self, mock_mqtt_client, access_token, user_id):
         """Test MQTT on_connect callback."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -270,10 +270,10 @@ class TestOlarmConnect:
         expected_calls = [(("topic1",),), (("topic2",),)]
         mock_client_instance.subscribe.assert_has_calls(expected_calls, any_order=True)
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_message(self, mock_mqtt_client, access_token, user_id):
         """Test MQTT on_message callback."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -296,12 +296,12 @@ class TestOlarmConnect:
         # Callback should be called with parsed payload
         callback.assert_called_once_with(topic, test_payload)
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_message_invalid_json(
         self, mock_mqtt_client, access_token, user_id
     ):
         """Test MQTT on_message callback with invalid JSON."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -325,19 +325,19 @@ class TestOlarmConnect:
 
     def test_set_mqtt_reconnection_callback(self, access_token):
         """Test setting MQTT reconnection callback."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         callback = MagicMock()
 
         client.set_mqtt_reconnection_callback(callback)
 
         assert client._mqtt_reconnection_callback == callback
 
-    @patch("olarmconnect.olarmconnect.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_disconnect_with_reconnection_callback(
         self, mock_mqtt_client, access_token, user_id
     ):
         """Test MQTT on_disconnect callback with reconnection callback."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
@@ -356,7 +356,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_api_send_action_device(self, access_token, device_id):
         """Test _api_send_action for device actions."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"success": True}
 
         with patch.object(
@@ -374,7 +374,7 @@ class TestOlarmConnect:
     @pytest.mark.asyncio
     async def test_api_send_action_prolink(self, access_token, device_id):
         """Test _api_send_action for prolink actions."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"success": True}
         prolink_id = "test_prolink_id"
 
@@ -412,7 +412,7 @@ class TestOlarmConnect:
         self, access_token, device_id, method_name, action_cmd, action_num
     ):
         """Test various device action methods."""
-        client = OlarmConnect(access_token)
+        client = OlarmFlowClient(access_token)
         expected_result = {"success": True}
 
         with patch.object(

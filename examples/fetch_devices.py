@@ -7,7 +7,7 @@ from pathlib import Path
 # Add parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from olarmconnect import OlarmConnect, OlarmConnectApiError
+from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def main(api_token):
     try:
-        async with OlarmConnect(api_token) as client:
+        async with OlarmFlowClient(api_token) as client:
             # Get all devices
             _LOGGER.info("Fetching devices...")
             devices_result = await client.get_devices()
@@ -34,16 +34,16 @@ async def main(api_token):
                     f"{index + 1}. {device.get('deviceName')} -> {device.get('deviceId')}"
                 )
 
-    except OlarmConnectApiError as e:
+    except OlarmFlowClientApiError as e:
         _LOGGER.error(f"API Error occurred: {e}")
     except Exception as e:
         _LOGGER.exception(f"Unexpected error occurred: {e}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test Olarm Connect API")
+    parser = argparse.ArgumentParser(description="Olarm Flow Client Example - Fetch Devices")
     parser.add_argument(
-        "--api-token", required=True, help="Your Olarm Connect API token"
+        "--api-token", required=True, help="Your Olarm API token"
     )
     args = parser.parse_args()
 

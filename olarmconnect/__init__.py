@@ -1,5 +1,5 @@
-"""OlarmConnect - An async Python client for connecting to Olarm services."""
+"""OlarmFlowClient - An async Python client for connecting to Olarm services."""
 
-from .olarmconnect import OlarmConnectApiError, OlarmConnect
+from .olarmflowclient import OlarmFlowClientApiError, OlarmFlowClient
 
-__all__ = ["OlarmConnectApiError", "OlarmConnect"]
+__all__ = ["OlarmFlowClientApiError", "OlarmFlowClient"]

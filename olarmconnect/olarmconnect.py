@@ -18,7 +18,7 @@ from .const import BASE_URL, MQTT_HOST, MQTT_KEEPALIVE, MQTT_PORT, MQTT_USER
 _LOGGER = logging.getLogger(__name__)
 
 
-class OlarmConnectApiError(Exception):
+class OlarmFlowClientApiError(Exception):
     """Raised when the API returns an error."""
 
     # Standard HTTP error descriptions
@@ -49,7 +49,7 @@ class OlarmConnectApiError(Exception):
         return super().__str__()
 
 
-class OlarmConnect:
+class OlarmFlowClient:
     """Async client class for interacting with the Olarm API."""
 
     def __init__(
@@ -57,7 +57,7 @@ class OlarmConnect:
         access_token: str,
         expires_at: int | None = None,
     ) -> None:
-        """Initialize the Olarm Connect client."""
+        """Initialize the Olarm Flow Client."""
 
         # tokens
         self._access_token = access_token
@@ -129,7 +129,7 @@ class OlarmConnect:
             async with self._api_session.request(method, url, **kwargs) as response:
                 if response.status != 200:
                     text = await response.text()
-                    raise OlarmConnectApiError(
+                    raise OlarmFlowClientApiError(
                         "Request failed",
                         status_code=response.status,
                         response_text=text,
@@ -141,7 +141,7 @@ class OlarmConnect:
                     result = await response.text()
 
         except aiohttp.ClientError as e:
-            raise OlarmConnectApiError(f"API request failed: {e!s}") from e
+            raise OlarmFlowClientApiError(f"API request failed: {e!s}") from e
         finally:
             await self._api_close()
 

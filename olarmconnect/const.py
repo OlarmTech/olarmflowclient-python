@@ -1,4 +1,4 @@
-"""Constants for the OlarmConnect integration."""
+"""Constants for the OlarmFlowClient integration."""
 
 BASE_URL = "https://api.olarm.com"
 MQTT_HOST = "mqtt-pubapi.olarm.com"

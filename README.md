@@ -1,4 +1,4 @@
-# OlarmConnect
+# OlarmFlowClient
 
 ## About Olarm
 
@@ -19,14 +19,14 @@ For more information about our Olarm Public API, please see our official API doc
 
 1. Sign up at https://login.olarm.com
 2. Go to API section, generate token
-3. `pip install olarmconnect`
+3. `pip install olarmflowclient`
 4. Copy this code:
 ```
 import asyncio
-from olarmconnect import OlarmConnect
+from olarmflowclient import OlarmFlowClient
 
 async def main():
-    async with OlarmConnect("your-token-here") as client:
+    async with OlarmFlowClient("your-token-here") as client:
         devices = await client.get_devices()
         print(f"You have {len(devices['data'])} devices")
 
