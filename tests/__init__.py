@@ -1,3 +1,3 @@
 """
-Test package for olarmconnect
+Test package for olarmflowclient
 """
