@@ -22,8 +22,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "aiohttp>=3.8.0",
-    "paho-mqtt>=1.6.1",
+    "aiohttp>=3.12.0",
+    "paho-mqtt>=2.1.0",
 ]
 
 [project.urls]
