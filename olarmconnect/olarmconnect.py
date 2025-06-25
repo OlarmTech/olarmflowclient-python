@@ -23,7 +23,6 @@ class OlarmConnectApiError(Exception):
 
     # Standard HTTP error descriptions
     HTTP_ERROR_DESCRIPTIONS = {
-        400: "Bad Request",
         403: "Unauthorized", 
         429: "Request was rate limited",
         500: "Olarm server error"
