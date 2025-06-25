@@ -55,12 +55,16 @@ This library provides asynchronous access using `aiohttp` for API calls and `pah
 ## Development
 
 1.  Clone the repository.
-2.  Install dependencies:
+2.  Setup venv if necessary
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate # other shells might be different 
+    ```
+3.  Install dependencies:
     ```bash
     pip3 install -r requirements.txt
-    pip3 install ruff # Install the linter/formatter
     ```
-3.  Format code and check for linting errors using Ruff:
+4.  Format code and check for linting errors using Ruff:
     ```bash
     # Check for issues
     python3 -m ruff check .

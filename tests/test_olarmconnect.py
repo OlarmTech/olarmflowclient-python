@@ -6,9 +6,6 @@ import json
 import pytest
 import ssl
 from unittest.mock import patch, MagicMock, AsyncMock
-import aiohttp
-from aiohttp import ClientSession
-import paho.mqtt.client as mqtt
 
 from olarmconnect import OlarmConnect, OlarmConnectApiError
 

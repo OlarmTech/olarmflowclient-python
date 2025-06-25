@@ -21,6 +21,14 @@ _LOGGER = logging.getLogger(__name__)
 class OlarmConnectApiError(Exception):
     """Raised when the API returns an error."""
 
+    # Standard HTTP error descriptions
+    HTTP_ERROR_DESCRIPTIONS = {
+        400: "Bad Request",
+        403: "Unauthorized", 
+        429: "Request was rate limited",
+        500: "Olarm server error"
+    }
+
     def __init__(
         self,
         message: str,
@@ -35,6 +43,9 @@ class OlarmConnectApiError(Exception):
     def __str__(self) -> str:
         """Return string representation of the error."""
         if self.status_code:
+            error_desc = self.HTTP_ERROR_DESCRIPTIONS.get(self.status_code, "")
+            if error_desc:
+                return f"API Error {self.status_code} ({error_desc}): {super().__str__()} - {self.response_text}"
             return f"API Error {self.status_code}: {super().__str__()} - {self.response_text}"
         return super().__str__()
 
@@ -193,7 +204,7 @@ class OlarmConnect:
             params={"deviceApiAccessOnly": "1"},
         )
 
-    async def get_device_actions(self, device_id: str) -> list[dict[str, Any]]:
+    async def get_device_actions(self, device_id: str) -> dict[str, Any]:
         """Get list of past actions for a specific device."""
         return await self._api_make_request(
             "GET", f"/api/v4/devices/{device_id}/actions"

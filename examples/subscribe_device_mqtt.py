@@ -35,6 +35,11 @@ async def main(api_token):
                 _LOGGER.error("No devices found or unexpected data format received.")
                 return  # Exit if no devices or wrong format
 
+            # Ensure user_id is not None
+            if user_id is None:
+                _LOGGER.error("No user ID found in devices result")
+                return
+
             # Connect to MQTT broker (using client_id_suffix="5" to avoid conflicts if user is already setup a client)
             client.start_mqtt(
                 user_id, ssl_context=ssl.create_default_context(), client_id_suffix="5"
