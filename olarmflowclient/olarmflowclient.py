@@ -49,6 +49,55 @@ class OlarmFlowClientApiError(Exception):
         return super().__str__()
 
 
+class TokenExpired(OlarmFlowClientApiError):
+    """Raised when the access token has expired (401)."""
+
+    def __init__(self, message: str = "Access token has expired") -> None:
+        """Initialize the token expired error."""
+        super().__init__(message, status_code=401)
+
+
+class Unauthorized(OlarmFlowClientApiError):
+    """Raised when the request is unauthorized (403)."""
+
+    def __init__(self, message: str = "Unauthorized access") -> None:
+        """Initialize the unauthorized error."""
+        super().__init__(message, status_code=403)
+
+
+class DeviceNotFound(OlarmFlowClientApiError):
+    """Raised when a specific device is not found or not accessible (404, 403)."""
+
+    def __init__(self, device_id: str = None) -> None:
+        """Initialize the device not found error."""
+        message = f"Device '{device_id}' not found" if device_id else "Device not found"
+        super().__init__(message, status_code=404)
+
+
+class DevicesNotFound(OlarmFlowClientApiError):
+    """Raised when no devices are found for the account (404)."""
+
+    def __init__(self, message: str = "No devices found for this account") -> None:
+        """Initialize the devices not found error."""
+        super().__init__(message, status_code=404)
+
+
+class ServerError(OlarmFlowClientApiError):
+    """Raised when the server returns an internal error (500)."""
+
+    def __init__(self, message: str = "Server internal error") -> None:
+        """Initialize the server error."""
+        super().__init__(message, status_code=500)
+
+
+class RateLimited(OlarmFlowClientApiError):
+    """Raised when the request is rate limited (429)."""
+
+    def __init__(self, message: str = "Too many requests - rate limited") -> None:
+        """Initialize the rate limited error."""
+        super().__init__(message, status_code=429)
+
+
 class OlarmFlowClient:
     """Async client class for interacting with the Olarm API."""
 
@@ -168,6 +217,20 @@ class OlarmFlowClient:
             jsonBody={"actionCmd": action_cmd, "actionNum": action_num},
         )
 
+    def _handle_api_error(self, err: OlarmFlowClientApiError) -> None:
+        """Handle common API errors by raising specific exceptions."""
+        if err.status_code == 401:
+            raise TokenExpired() from err
+        elif err.status_code == 403:
+            raise Unauthorized() from err
+        elif err.status_code == 429:
+            raise RateLimited() from err
+        elif err.status_code == 500:
+            raise ServerError() from err
+        else:
+            # Re-raise original error for other status codes
+            raise err
+
     async def update_access_token(self, access_token: str, expires_at: int) -> None:
         """Update the access token."""
         self._access_token = access_token
@@ -186,22 +249,57 @@ class OlarmFlowClient:
         pageLength: int | None = 100,
         search: str | None = None,
     ) -> dict[str, Any]:
-        """Get list of devices associated with the account."""
+        """Get list of devices associated with the account.
+        
+        Raises:
+            TokenExpired: When the access token has expired (401).
+            Unauthorized: When the request is unauthorized (403).
+            DevicesNotFound: When no devices are found (404).
+            RateLimited: When the request is rate limited (429).
+            ServerError: When the server returns an internal error (500).
+            OlarmFlowClientApiError: For other API errors.
+        """
         params = {
             "page": page,
             "pageLength": pageLength,
             "search": search,
             "deviceApiAccessOnly": "1",
         }
-        return await self._api_make_request("GET", "/api/v4/devices", params=params)
+        
+        try:
+            return await self._api_make_request("GET", "/api/v4/devices", params=params)
+        except OlarmFlowClientApiError as err:
+            # Handle specific status codes
+            if err.status_code == 404:
+                raise DevicesNotFound() from err
+            else:
+                # Handle common status codes (401, 403, 500) or re-raise
+                self._handle_api_error(err)
 
     async def get_device(self, device_id: str) -> dict[str, Any]:
-        """Get a specific device associated with the account."""
-        return await self._api_make_request(
-            "GET",
-            f"/api/v4/devices/{device_id}",
-            params={"deviceApiAccessOnly": "1"},
-        )
+        """Get a specific device associated with the account.
+        
+        Raises:
+            TokenExpired: When the access token has expired (401).
+            DeviceNotFound: When the device is not found or not accessible (404, 403).
+            RateLimited: When the request is rate limited (429).
+            ServerError: When the server returns an internal error (500).
+            OlarmFlowClientApiError: For other API errors.
+        """
+        try:
+            return await self._api_make_request(
+                "GET",
+                f"/api/v4/devices/{device_id}",
+                params={"deviceApiAccessOnly": "1"},
+            )
+        except OlarmFlowClientApiError as err:
+            # Handle specific status codes
+            if err.status_code == 404 or err.status_code == 403:
+                # Both 404 and 403 mean the device is not accessible/not found
+                raise DeviceNotFound(device_id) from err
+            else:
+                # Handle other common status codes (401, 500) or re-raise
+                self._handle_api_error(err)
 
     async def get_device_actions(self, device_id: str) -> dict[str, Any]:
         """Get list of past actions for a specific device."""

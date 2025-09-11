@@ -7,7 +7,7 @@ from pathlib import Path
 # Add parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError
+from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError, DevicesNotFound
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +34,8 @@ async def main(api_token):
                     f"{index + 1}. {device.get('deviceName')} -> {device.get('deviceId')}"
                 )
 
+    except DevicesNotFound as e:
+        _LOGGER.error(f"No devices found for this account: {e}")
     except OlarmFlowClientApiError as e:
         _LOGGER.error(f"API Error occurred: {e}")
     except Exception as e:

@@ -8,7 +8,7 @@ import ssl
 # Add parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError
+from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError, DevicesNotFound
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -62,6 +62,8 @@ async def main(api_token):
                 _LOGGER.info("Received cancellation, stopping MQTT...")
                 raise
 
+    except DevicesNotFound as e:
+        _LOGGER.error(f"No devices found for this account: {e}")
     except OlarmFlowClientApiError as e:
         _LOGGER.error(f"API Error occurred: {e}")
     except Exception as e:
