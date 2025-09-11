@@ -7,7 +7,16 @@ import pytest
 import ssl
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError
+from olarmflowclient import (
+    OlarmFlowClient,
+    OlarmFlowClientApiError,
+    TokenExpired,
+    Unauthorized,
+    DeviceNotFound,
+    DevicesNotFound,
+    RateLimited,
+    ServerError,
+)
 
 
 @pytest.fixture
@@ -95,6 +104,66 @@ class TestOlarmFlowClient:
         simple_error = OlarmFlowClientApiError("Simple error")
         assert str(simple_error) == "Simple error"
 
+    def test_device_not_found_error(self):
+        """Test DeviceNotFound initialization and inheritance."""
+        # Test without device ID
+        error = DeviceNotFound()
+        assert "Device not found" in str(error)
+        assert "API Error 404" in str(error)
+        assert error.status_code == 404
+        assert isinstance(error, OlarmFlowClientApiError)
+
+        # Test with device ID
+        device_error = DeviceNotFound("test_device_123")
+        assert "Device 'test_device_123' not found" in str(device_error)
+        assert "API Error 404" in str(device_error)
+        assert device_error.status_code == 404
+
+    def test_devices_not_found_error(self):
+        """Test DevicesNotFound initialization and inheritance."""
+        error = DevicesNotFound()
+        assert "No devices found for this account" in str(error)
+        assert "API Error 404" in str(error)
+        assert error.status_code == 404
+        assert isinstance(error, OlarmFlowClientApiError)
+
+        # Test with custom message
+        custom_error = DevicesNotFound("Custom no devices message")
+        assert "Custom no devices message" in str(custom_error)
+        assert custom_error.status_code == 404
+
+    def test_token_expired_error(self):
+        """Test TokenExpired initialization and inheritance."""
+        error = TokenExpired()
+        assert "Access token has expired" in str(error)
+        assert "API Error 401" in str(error)
+        assert error.status_code == 401
+        assert isinstance(error, OlarmFlowClientApiError)
+
+    def test_unauthorized_error(self):
+        """Test Unauthorized initialization and inheritance."""
+        error = Unauthorized()
+        assert "Unauthorized access" in str(error)
+        assert "API Error 403" in str(error)
+        assert error.status_code == 403
+        assert isinstance(error, OlarmFlowClientApiError)
+
+    def test_server_error(self):
+        """Test ServerError initialization and inheritance."""
+        error = ServerError()
+        assert "Server internal error" in str(error)
+        assert "API Error 500" in str(error)
+        assert error.status_code == 500
+        assert isinstance(error, OlarmFlowClientApiError)
+
+    def test_rate_limited_error(self):
+        """Test RateLimited initialization and inheritance."""
+        error = RateLimited()
+        assert "Too many requests - rate limited" in str(error)
+        assert "API Error 429" in str(error)
+        assert error.status_code == 429
+        assert isinstance(error, OlarmFlowClientApiError)
+
     # Note: Direct _api_make_request tests removed due to complex aiohttp mocking requirements
     # API functionality is adequately tested through higher-level method tests
 
@@ -140,6 +209,104 @@ class TestOlarmFlowClient:
             )
 
     @pytest.mark.asyncio
+    async def test_get_devices_404_raises_devices_not_found(self, access_token):
+        """Test get_devices method raises DevicesNotFound on 404."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Not found", 404, "No devices found")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(DevicesNotFound) as exc_info:
+                await client.get_devices()
+
+            # Check that the original error is chained
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 404
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_devices_401_raises_token_expired(self, access_token):
+        """Test get_devices method raises TokenExpired on 401."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Unauthorized", 401, "Token expired")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(TokenExpired) as exc_info:
+                await client.get_devices()
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 401
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_devices_403_raises_unauthorized(self, access_token):
+        """Test get_devices method raises Unauthorized on 403."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Forbidden", 403, "Access denied")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(Unauthorized) as exc_info:
+                await client.get_devices()
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 403
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_devices_500_raises_server_error(self, access_token):
+        """Test get_devices method raises ServerError on 500."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Internal error", 500, "Server error")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(ServerError) as exc_info:
+                await client.get_devices()
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 500
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_devices_429_raises_rate_limited(self, access_token):
+        """Test get_devices method raises RateLimited on 429."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Too many requests", 429, "Rate limit exceeded")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(RateLimited) as exc_info:
+                await client.get_devices()
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 429
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_devices_other_errors_passthrough(self, access_token):
+        """Test get_devices method passes through other status codes."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Bad gateway", 502, "Gateway error")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(OlarmFlowClientApiError) as exc_info:
+                await client.get_devices()
+
+            # Should be the same error object for unhandled status codes
+            assert exc_info.value == api_error
+            assert exc_info.value.status_code == 502
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_get_device(self, access_token, device_id):
         """Test get_device method."""
         client = OlarmFlowClient(access_token)
@@ -156,6 +323,74 @@ class TestOlarmFlowClient:
                 f"/api/v4/devices/{device_id}",
                 params={"deviceApiAccessOnly": "1"},
             )
+
+    @pytest.mark.asyncio
+    async def test_get_device_404_raises_device_not_found(self, access_token, device_id):
+        """Test get_device method raises DeviceNotFound on 404."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Not found", 404, "Device not found")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(DeviceNotFound) as exc_info:
+                await client.get_device(device_id)
+
+            # Check that the original error is chained and message includes device ID
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 404
+            assert device_id in str(exc_info.value)
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_device_401_raises_token_expired(self, access_token, device_id):
+        """Test get_device method raises TokenExpired on 401."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Unauthorized", 401, "Token expired")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(TokenExpired) as exc_info:
+                await client.get_device(device_id)
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 401
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_device_403_raises_device_not_found(self, access_token, device_id):
+        """Test get_device method raises DeviceNotFound on 403 (device not accessible)."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Forbidden", 403, "Access denied")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(DeviceNotFound) as exc_info:
+                await client.get_device(device_id)
+
+            # 403 should be treated as device not found for specific device access
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 404  # DeviceNotFound always reports 404
+            assert device_id in str(exc_info.value)
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_device_429_raises_rate_limited(self, access_token, device_id):
+        """Test get_device method raises RateLimited on 429."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Too many requests", 429, "Rate limit exceeded")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(RateLimited) as exc_info:
+                await client.get_device(device_id)
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 429
+            mock_request.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_send_device_area_arm(self, access_token, device_id):
