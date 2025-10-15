@@ -508,14 +508,13 @@ class OlarmFlowClient:
         self._mqtt_client.username_pw_set(self._mqtt_username, self._mqtt_password)
         self._mqtt_client.reconnect_delay_set(min_delay=8, max_delay=60)
 
-        # connect to the broker
-        try:
-            # Set up callbacks before connecting
-            self._mqtt_client.on_connect = self._mqtt_on_connect
-            self._mqtt_client.on_disconnect = self._mqtt_on_disconnect
-            self._mqtt_client.on_message = self._mqtt_on_message
+        # Set up callbacks before connecting
+        self._mqtt_client.on_connect = self._mqtt_on_connect
+        self._mqtt_client.on_disconnect = self._mqtt_on_disconnect
+        self._mqtt_client.on_message = self._mqtt_on_message
 
-            # Use connect_async for non-blocking connection
+        # connect to the broker using connect_async for non-blocking connection
+        try:
             self._mqtt_client.connect_async(
                 self._mqtt_host, self._mqtt_port, keepalive=MQTT_KEEPALIVE
             )
@@ -528,9 +527,12 @@ class OlarmFlowClient:
     def stop_mqtt(self) -> None:
         """Stop and disconnect MQTT."""
         if self._mqtt_client is not None:
-            self._mqtt_client.loop_stop()
-            self._mqtt_client.disconnect()
-            _LOGGER.debug("MQTT client stopped and disconnected")
+            try:
+                self._mqtt_client.loop_stop()
+                self._mqtt_client.disconnect()
+                _LOGGER.debug("MQTT client stopped and disconnected")
+            except Exception as e:
+                _LOGGER.warning("Error stopping MQTT client: %s", e)
         else:
             _LOGGER.debug("MQTT client was not running")
 

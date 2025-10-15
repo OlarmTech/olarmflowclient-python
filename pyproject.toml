@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "olarmflowclient"
-version = "1.0.1"
+version = "1.0.2"
 description = "The official asynchronous Python client for the Olarm Public API."
 readme = "README.md"
 requires-python = ">=3.10"
