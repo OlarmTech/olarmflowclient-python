@@ -7,7 +7,14 @@ from pathlib import Path
 # Add parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError, TokenExpired, Unauthorized, RateLimited, ServerError
+from olarmflowclient import (
+    OlarmFlowClient,
+    OlarmFlowClientApiError,
+    TokenExpired,
+    Unauthorized,
+    RateLimited,
+    ServerError,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,10 +43,10 @@ async def main(device_id, api_token, output_num):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Olarm Flow Client Example - Arm Device")
-    parser.add_argument(
-        "--api-token", required=True, help="Your Olarm API token"
+    parser = argparse.ArgumentParser(
+        description="Olarm Flow Client Example - Arm Device"
     )
+    parser.add_argument("--api-token", required=True, help="Your Olarm API token")
     parser.add_argument("--device-id", required=True, help="ID of the device")
     parser.add_argument(
         "--output-num",

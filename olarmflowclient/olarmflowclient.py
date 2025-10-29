@@ -23,9 +23,9 @@ class OlarmFlowClientApiError(Exception):
 
     # Standard HTTP error descriptions
     HTTP_ERROR_DESCRIPTIONS = {
-        403: "Unauthorized", 
+        403: "Unauthorized",
         429: "Request was rate limited",
-        500: "Olarm server error"
+        500: "Olarm server error",
     }
 
     def __init__(
@@ -98,6 +98,22 @@ class RateLimited(OlarmFlowClientApiError):
         super().__init__(message, status_code=429)
 
 
+class MqttConnectError(OlarmFlowClientApiError):
+    """Raised when MQTT connection fails."""
+
+    def __init__(self, message: str = "MQTT connection failed") -> None:
+        """Initialize the MQTT connection error."""
+        super().__init__(message)
+
+
+class MqttTimeoutError(OlarmFlowClientApiError):
+    """Raised when MQTT connection times out."""
+
+    def __init__(self, message: str = "MQTT connection timeout") -> None:
+        """Initialize the MQTT timeout error."""
+        super().__init__(message)
+
+
 class OlarmFlowClient:
     """Async client class for interacting with the Olarm API."""
 
@@ -111,7 +127,9 @@ class OlarmFlowClient:
         # tokens
         self._access_token = access_token
         self._expires_at = expires_at
-        self._is_jwt_token = len(self._access_token.split(".")) == 3
+        self._is_jwt_token = (
+            len(self._access_token.split(".")) == 3 and self._expires_at is not None
+        )
 
         # api client attributes (initialized to None)
         self._api_session = None
@@ -125,6 +143,7 @@ class OlarmFlowClient:
         self._mqtt_client: mqtt.Client | None = None
         self._mqtt_callbacks: dict[str, Callable[[str, dict[str, Any]], None]] = {}
         self._mqtt_reconnection_callback: Callable[[], None] | None = None
+        self._event_loop = None
 
     async def __aenter__(self):
         """Async context manager enter."""
@@ -250,7 +269,7 @@ class OlarmFlowClient:
         search: str | None = None,
     ) -> dict[str, Any]:
         """Get list of devices associated with the account.
-        
+
         Raises:
             TokenExpired: When the access token has expired (401).
             Unauthorized: When the request is unauthorized (403).
@@ -265,7 +284,7 @@ class OlarmFlowClient:
             "search": search,
             "deviceApiAccessOnly": "1",
         }
-        
+
         try:
             return await self._api_make_request("GET", "/api/v4/devices", params=params)
         except OlarmFlowClientApiError as err:
@@ -278,7 +297,7 @@ class OlarmFlowClient:
 
     async def get_device(self, device_id: str) -> dict[str, Any]:
         """Get a specific device associated with the account.
-        
+
         Raises:
             TokenExpired: When the access token has expired (401).
             DeviceNotFound: When the device is not found or not accessible (404, 403).
@@ -473,7 +492,6 @@ class OlarmFlowClient:
     def start_mqtt(
         self,
         user_id: str,
-        ssl_context: ssl.SSLContext | None = None,
         client_id_suffix: str | None = "1",
     ) -> None:
         """Start the MQTT client."""
@@ -484,6 +502,9 @@ class OlarmFlowClient:
         self._mqtt_username = MQTT_USER
         self._mqtt_password = self._access_token
         self._mqtt_clientId = f"{user_id}-{client_id_suffix}"
+
+        # Create SSL context
+        ssl_context = ssl.create_default_context()
 
         # Initialize MQTT client with websockets transport
         _LOGGER.debug(
@@ -506,7 +527,7 @@ class OlarmFlowClient:
 
         # setup options
         self._mqtt_client.username_pw_set(self._mqtt_username, self._mqtt_password)
-        self._mqtt_client.reconnect_delay_set(min_delay=8, max_delay=60)
+        self._mqtt_client.reconnect_delay_set(min_delay=4, max_delay=60)
 
         # Set up callbacks before connecting
         self._mqtt_client.on_connect = self._mqtt_on_connect
@@ -522,7 +543,46 @@ class OlarmFlowClient:
 
         except Exception as e:
             _LOGGER.error("Failed to connect to MQTT broker: %s", e)
+            raise MqttConnectError(f"Failed to connect to MQTT broker: {e}") from e
+
+    async def start_mqtt_async(
+        self,
+        user_id: str,
+        client_id_suffix: str | None = "1",
+        event_loop=None,
+        timeout: float = 30.0,
+    ) -> None:
+        """Start the MQTT client asynchronously with thread-safe handling.
+
+        Raises:
+            MqttConnectError: If connection to MQTT broker fails.
+            MqttTimeoutError: If connection times out.
+        """
+        import asyncio
+
+        # Store event loop for thread-safe callbacks
+        if event_loop is not None:
+            self._event_loop = event_loop
+        else:
+            self._event_loop = asyncio.get_event_loop()
+
+        # Run start_mqtt in executor with timeout
+        try:
+            await asyncio.wait_for(
+                self._event_loop.run_in_executor(
+                    None, self.start_mqtt, user_id, client_id_suffix
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as e:
+            _LOGGER.error("Timeout connecting to Olarm MQTT Service")
+            raise MqttTimeoutError("MQTT connection timeout") from e
+        except MqttConnectError:
+            # Re-raise MQTT connect errors as-is
             raise
+        except Exception as e:
+            _LOGGER.error("Failed to start MQTT client: %s", e)
+            raise MqttConnectError(f"Failed to start MQTT client: {e}") from e
 
     def stop_mqtt(self) -> None:
         """Stop and disconnect MQTT."""
@@ -593,13 +653,19 @@ class OlarmFlowClient:
         else:
             _LOGGER.warning("Disconnected from MQTT broker: %s [%s]", reason, rc)
 
-        # callback used to refresh tokens if using oauth
+        # Handle authentication errors by calling reconnection callback if available
         if rc in (4, 5, 7) and self._mqtt_reconnection_callback is not None:
             _LOGGER.debug("Calling reconnection callback to refresh token if necessary")
-            try:
-                self._mqtt_reconnection_callback()
-            except (OSError, ValueError, TypeError) as e:
-                _LOGGER.error("Error in reconnection callback: %s", e)
+
+            # Use thread-safe scheduling if event loop is available
+            if self._event_loop is not None:
+                self._event_loop.call_soon_threadsafe(self._mqtt_reconnection_callback)
+            else:
+                # Call directly if no event loop
+                try:
+                    self._mqtt_reconnection_callback()
+                except (OSError, ValueError, TypeError) as e:
+                    _LOGGER.error("Error in reconnection callback: %s", e)
 
     def _mqtt_on_message(
         self, client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage

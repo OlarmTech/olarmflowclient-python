@@ -43,10 +43,10 @@ async def main(api_token):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Olarm Flow Client Example - Fetch Devices")
-    parser.add_argument(
-        "--api-token", required=True, help="Your Olarm API token"
+    parser = argparse.ArgumentParser(
+        description="Olarm Flow Client Example - Fetch Devices"
     )
+    parser.add_argument("--api-token", required=True, help="Your Olarm API token")
     args = parser.parse_args()
 
     asyncio.run(main(args.api_token))

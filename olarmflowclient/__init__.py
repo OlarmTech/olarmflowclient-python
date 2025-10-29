@@ -8,6 +8,8 @@ from .olarmflowclient import (
     DevicesNotFound,
     RateLimited,
     ServerError,
+    MqttConnectError,
+    MqttTimeoutError,
     OlarmFlowClient,
 )
 
@@ -19,5 +21,7 @@ __all__ = [
     "DevicesNotFound",
     "RateLimited",
     "ServerError",
+    "MqttConnectError",
+    "MqttTimeoutError",
     "OlarmFlowClient",
 ]

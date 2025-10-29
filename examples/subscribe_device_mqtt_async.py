@@ -12,11 +12,24 @@ from olarmflowclient import (
     OlarmFlowClientApiError,
     DevicesNotFound,
     MqttConnectError,
+    MqttTimeoutError,
 )
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
+
+
+def mqtt_reconnection_callback():
+    """Callback function for MQTT reconnection events.
+
+    This is called by the library when MQTT disconnects due to authentication issues.
+    For OAuth tokens, this would trigger a token refresh.
+    For classic API tokens, this just logs the reconnection attempt.
+    """
+    _LOGGER.info("MQTT reconnection callback triggered - authentication issue detected")
+    # In a real OAuth implementation, you would refresh the token here
+    # For example: await client.update_access_token(new_token, expires_at)
 
 
 async def main(api_token):
@@ -44,17 +57,28 @@ async def main(api_token):
                 _LOGGER.error("No user ID found in devices result")
                 return
 
-            # Connect to MQTT broker (using client_id_suffix="5" to avoid conflicts if user is already setup a client)
-            _LOGGER.info("Connecting to MQTT broker...")
+            # Set up MQTT reconnection callback before connecting
+            # This will be called if MQTT disconnects due to authentication errors
+            _LOGGER.info("Setting up MQTT reconnection callback...")
+            client.set_mqtt_reconnection_callback(mqtt_reconnection_callback)
+
+            # Connect to MQTT broker using async method
+            # (using client_id_suffix="6" to avoid conflicts if user is already setup a client)
+            _LOGGER.info("Connecting to MQTT broker asynchronously...")
             try:
-                client.start_mqtt(user_id, client_id_suffix="4")
+                await client.start_mqtt_async(
+                    user_id=user_id,
+                    client_id_suffix="5",
+                    event_loop=asyncio.get_running_loop(),
+                    timeout=10.0,
+                )
                 _LOGGER.info("Successfully connected to MQTT broker")
+            except MqttTimeoutError as e:
+                _LOGGER.error(f"Timeout connecting to MQTT: {e}")
+                return
             except MqttConnectError as e:
                 _LOGGER.error(f"Failed to connect to MQTT: {e}")
                 return
-
-            # wait a few seconds to give the client time to connect
-            await asyncio.sleep(3)
 
             # Subscribe to Device Events (first 8 of them)
             for device in devices[:8]:
@@ -87,7 +111,7 @@ def message_callback(topic, payload):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Olarm Flow Client Example - Subscribe to Device using MQTT"
+        description="Olarm Flow Client Example - Subscribe to Device using MQTT (Async)"
     )
     parser.add_argument("--api-token", required=True, help="Your Olarm API token")
 

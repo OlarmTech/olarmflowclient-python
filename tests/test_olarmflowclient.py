@@ -4,7 +4,6 @@ Tests for the unified OlarmFlowClient class combining API and MQTT functionality
 
 import json
 import pytest
-import ssl
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from olarmflowclient import (
@@ -16,6 +15,8 @@ from olarmflowclient import (
     DevicesNotFound,
     RateLimited,
     ServerError,
+    MqttConnectError,
+    MqttTimeoutError,
 )
 
 
@@ -277,7 +278,9 @@ class TestOlarmFlowClient:
     async def test_get_devices_429_raises_rate_limited(self, access_token):
         """Test get_devices method raises RateLimited on 429."""
         client = OlarmFlowClient(access_token)
-        api_error = OlarmFlowClientApiError("Too many requests", 429, "Rate limit exceeded")
+        api_error = OlarmFlowClientApiError(
+            "Too many requests", 429, "Rate limit exceeded"
+        )
 
         with patch.object(
             client, "_api_make_request", side_effect=api_error
@@ -325,7 +328,9 @@ class TestOlarmFlowClient:
             )
 
     @pytest.mark.asyncio
-    async def test_get_device_404_raises_device_not_found(self, access_token, device_id):
+    async def test_get_device_404_raises_device_not_found(
+        self, access_token, device_id
+    ):
         """Test get_device method raises DeviceNotFound on 404."""
         client = OlarmFlowClient(access_token)
         api_error = OlarmFlowClientApiError("Not found", 404, "Device not found")
@@ -359,7 +364,9 @@ class TestOlarmFlowClient:
             mock_request.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_device_403_raises_device_not_found(self, access_token, device_id):
+    async def test_get_device_403_raises_device_not_found(
+        self, access_token, device_id
+    ):
         """Test get_device method raises DeviceNotFound on 403 (device not accessible)."""
         client = OlarmFlowClient(access_token)
         api_error = OlarmFlowClientApiError("Forbidden", 403, "Access denied")
@@ -372,7 +379,9 @@ class TestOlarmFlowClient:
 
             # 403 should be treated as device not found for specific device access
             assert exc_info.value.__cause__ == api_error
-            assert exc_info.value.status_code == 404  # DeviceNotFound always reports 404
+            assert (
+                exc_info.value.status_code == 404
+            )  # DeviceNotFound always reports 404
             assert device_id in str(exc_info.value)
             mock_request.assert_called_once()
 
@@ -380,7 +389,9 @@ class TestOlarmFlowClient:
     async def test_get_device_429_raises_rate_limited(self, access_token, device_id):
         """Test get_device method raises RateLimited on 429."""
         client = OlarmFlowClient(access_token)
-        api_error = OlarmFlowClientApiError("Too many requests", 429, "Rate limit exceeded")
+        api_error = OlarmFlowClientApiError(
+            "Too many requests", 429, "Rate limit exceeded"
+        )
 
         with patch.object(
             client, "_api_make_request", side_effect=api_error
@@ -406,21 +417,28 @@ class TestOlarmFlowClient:
             assert result == expected_result
             mock_action.assert_called_once_with(device_id, "area-arm", 1)
 
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
     @patch("olarmflowclient.olarmflowclient.mqtt.Client")
-    def test_start_mqtt(self, mock_mqtt_client, access_token, user_id):
+    def test_start_mqtt(
+        self, mock_mqtt_client, mock_ssl_context, access_token, user_id
+    ):
         """Test start_mqtt method."""
         client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
+        mock_ssl = MagicMock()
+        mock_ssl_context.return_value = mock_ssl
 
-        ssl_context = ssl.create_default_context()
-        client.start_mqtt(user_id, ssl_context, "test_suffix")
+        client.start_mqtt(user_id, "test_suffix")
+
+        # Verify SSL context was created
+        mock_ssl_context.assert_called_once()
 
         # Verify MQTT client was configured correctly
         mock_mqtt_client.assert_called_once_with(
             client_id=f"{user_id}-test_suffix", transport="websockets"
         )
-        mock_client_instance.tls_set_context.assert_called_once_with(ssl_context)
+        mock_client_instance.tls_set_context.assert_called_once_with(mock_ssl)
         mock_client_instance.tls_insecure_set.assert_called_once_with(False)
         mock_client_instance.ws_set_options.assert_called_once_with(path="/mqtt")
         mock_client_instance.username_pw_set.assert_called_once_with(
@@ -658,3 +676,127 @@ class TestOlarmFlowClient:
 
             assert result == expected_result
             mock_action.assert_called_once_with(device_id, action_cmd, action_num)
+
+    def test_mqtt_connect_error(self):
+        """Test MqttConnectError initialization and inheritance."""
+        error = MqttConnectError()
+        assert "MQTT connection failed" in str(error)
+        assert isinstance(error, OlarmFlowClientApiError)
+
+        # Test with custom message
+        custom_error = MqttConnectError("Custom MQTT error")
+        assert "Custom MQTT error" in str(custom_error)
+
+    def test_mqtt_timeout_error(self):
+        """Test MqttTimeoutError initialization and inheritance."""
+        error = MqttTimeoutError()
+        assert "timeout" in str(error).lower()
+        assert isinstance(error, OlarmFlowClientApiError)
+
+    @pytest.mark.asyncio
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
+    async def test_start_mqtt_async(
+        self, mock_ssl_context, mock_mqtt_client, access_token, user_id
+    ):
+        """Test start_mqtt_async method."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+        mock_ssl = MagicMock()
+        mock_ssl_context.return_value = mock_ssl
+
+        # Get actual event loop
+        loop = asyncio.get_event_loop()
+
+        await client.start_mqtt_async(
+            user_id, "test_suffix", event_loop=loop, timeout=30.0
+        )
+
+        # Verify event loop was stored
+        assert client._event_loop == loop
+
+        # Verify MQTT client was created
+        mock_mqtt_client.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_mqtt_async_timeout(self, access_token, user_id):
+        """Test start_mqtt_async method with timeout."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_event_loop = MagicMock()
+
+        # Mock run_in_executor to take too long
+        async def slow_executor(*args, **kwargs):
+            await asyncio.sleep(100)
+
+        mock_event_loop.run_in_executor = slow_executor
+
+        with pytest.raises(MqttTimeoutError):
+            await client.start_mqtt_async(
+                user_id, "test_suffix", event_loop=mock_event_loop, timeout=0.01
+            )
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_with_event_loop(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect with event loop uses thread-safe callback."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+        mock_event_loop = MagicMock()
+
+        client._event_loop = mock_event_loop
+        client.start_mqtt(user_id)
+
+        # Set reconnection callback
+        reconnect_callback = MagicMock()
+        client.set_mqtt_reconnection_callback(reconnect_callback)
+
+        # Simulate disconnect with authorization error (rc=5)
+        client._mqtt_on_disconnect(mock_client_instance, None, 5)
+
+        # With event loop, should use thread-safe scheduling
+        mock_event_loop.call_soon_threadsafe.assert_called_once_with(reconnect_callback)
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_without_event_loop(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect without event loop calls callback directly."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set reconnection callback
+        reconnect_callback = MagicMock()
+        client.set_mqtt_reconnection_callback(reconnect_callback)
+
+        # Simulate disconnect with authorization error (rc=4)
+        client._mqtt_on_disconnect(mock_client_instance, None, 4)
+
+        # Without event loop, callback should be called directly
+        reconnect_callback.assert_called_once()
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_no_callback(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect without callback doesn't raise error."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Don't set any callback
+
+        # Simulate disconnect with authorization error (rc=4)
+        # Should not raise any error
+        client._mqtt_on_disconnect(mock_client_instance, None, 4)
