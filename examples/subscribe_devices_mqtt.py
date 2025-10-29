@@ -3,12 +3,16 @@ import logging
 import argparse
 import sys
 from pathlib import Path
-import ssl
 
 # Add parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from olarmflowclient import OlarmFlowClient, OlarmFlowClientApiError, DevicesNotFound
+from olarmflowclient import (
+    OlarmFlowClient,
+    OlarmFlowClientApiError,
+    DevicesNotFound,
+    MqttConnectError,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -41,9 +45,13 @@ async def main(api_token):
                 return
 
             # Connect to MQTT broker (using client_id_suffix="5" to avoid conflicts if user is already setup a client)
-            client.start_mqtt(
-                user_id, ssl_context=ssl.create_default_context(), client_id_suffix="5"
-            )
+            _LOGGER.info("Connecting to MQTT broker...")
+            try:
+                client.start_mqtt(user_id, client_id_suffix="4")
+                _LOGGER.info("Successfully connected to MQTT broker")
+            except MqttConnectError as e:
+                _LOGGER.error(f"Failed to connect to MQTT: {e}")
+                return
 
             # wait a few seconds to give the client time to connect
             await asyncio.sleep(3)
@@ -78,10 +86,10 @@ def message_callback(topic, payload):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Olarm Flow Client Example - Subscribe to Device using MQTT")
-    parser.add_argument(
-        "--api-token", required=True, help="Your Olarm API token"
+    parser = argparse.ArgumentParser(
+        description="Olarm Flow Client Example - Subscribe to Device using MQTT"
     )
+    parser.add_argument("--api-token", required=True, help="Your Olarm API token")
 
     args = parser.parse_args()
 

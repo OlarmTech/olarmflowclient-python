@@ -29,10 +29,10 @@ async def main(device_id, api_token):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Olarm Flow Client Example - Fetch Device")
-    parser.add_argument(
-        "--api-token", required=True, help="Your Olarm API token"
+    parser = argparse.ArgumentParser(
+        description="Olarm Flow Client Example - Fetch Device"
     )
+    parser.add_argument("--api-token", required=True, help="Your Olarm API token")
     parser.add_argument("--device-id", required=True, help="ID of the device")
 
     args = parser.parse_args()
