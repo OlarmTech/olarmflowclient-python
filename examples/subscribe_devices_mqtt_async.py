@@ -20,21 +20,20 @@ logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 
-def mqtt_reconnection_callback():
-    """Callback function for MQTT reconnection events.
-
-    This is called by the library when MQTT disconnects due to authentication issues.
-    For OAuth tokens, this would trigger a token refresh.
-    For classic API tokens, this just logs the reconnection attempt.
-    """
-    _LOGGER.info("MQTT reconnection callback triggered - authentication issue detected")
-    # In a real OAuth implementation, you would refresh the token here
-    # For example: await client.update_access_token(new_token, expires_at)
-
-
 async def main(api_token):
     try:
         async with OlarmFlowClient(api_token) as client:
+            # Define unified connection status callback
+            def on_connection_status(status: str, info: dict) -> None:
+                if status == "connected":
+                    _LOGGER.info("MQTT: Connected!")
+                elif status == "disconnected":
+                    _LOGGER.info("MQTT: Disconnected")
+                elif status == "reconnecting":
+                    _LOGGER.info("MQTT: Reconnecting..")
+                elif status == "connecting":
+                    _LOGGER.info("MQTT: Connecting..")
+
             # Get all devices
             _LOGGER.info("Fetching devices...")
             devices_result = await client.get_devices()
@@ -57,13 +56,12 @@ async def main(api_token):
                 _LOGGER.error("No user ID found in devices result")
                 return
 
-            # Set up MQTT reconnection callback before connecting
-            # This will be called if MQTT disconnects due to authentication errors
-            _LOGGER.info("Setting up MQTT reconnection callback...")
-            client.set_mqtt_reconnection_callback(mqtt_reconnection_callback)
+            # Set up unified MQTT status callback before connecting
+            _LOGGER.info("Setting up MQTT status callback...")
+            client.set_mqtt_status_callback(on_connection_status)
 
             # Connect to MQTT broker using async method
-            # (using client_id_suffix="6" to avoid conflicts if user is already setup a client)
+            # (use a specific client_id_suffix to avoid conflicts if another client is running)
             _LOGGER.info("Connecting to MQTT broker asynchronously...")
             try:
                 await client.start_mqtt_async(

@@ -576,35 +576,39 @@ class TestOlarmFlowClient:
         # Callback should not be called due to JSON decode error
         callback.assert_not_called()
 
-    def test_set_mqtt_reconnection_callback(self, access_token):
-        """Test setting MQTT reconnection callback."""
+    def test_set_mqtt_status_callback(self, access_token):
+        """Test setting MQTT status callback."""
         client = OlarmFlowClient(access_token)
         callback = MagicMock()
 
-        client.set_mqtt_reconnection_callback(callback)
+        client.set_mqtt_status_callback(callback)
 
-        assert client._mqtt_reconnection_callback == callback
+        assert client._mqtt_status_callback == callback
 
     @patch("olarmflowclient.olarmflowclient.mqtt.Client")
-    def test_mqtt_on_disconnect_with_reconnection_callback(
+    def test_mqtt_on_disconnect_with_reconnecting_callback(
         self, mock_mqtt_client, access_token, user_id
     ):
-        """Test MQTT on_disconnect callback with reconnection callback."""
+        """Test MQTT on_disconnect callback with reconnecting status."""
         client = OlarmFlowClient(access_token)
         mock_client_instance = MagicMock()
         mock_mqtt_client.return_value = mock_client_instance
 
         client.start_mqtt(user_id)
 
-        # Set reconnection callback
-        reconnect_callback = MagicMock()
-        client.set_mqtt_reconnection_callback(reconnect_callback)
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
 
         # Simulate disconnect with authorization error (rc=4)
         client._mqtt_on_disconnect(mock_client_instance, None, 4)
 
-        # Reconnection callback should be called
-        reconnect_callback.assert_called_once()
+        # Status callback should be called with "reconnecting"
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "reconnecting"
+        assert "reason" in args[1]
+        assert "rc" in args[1]
 
     @pytest.mark.asyncio
     async def test_api_send_action_device(self, access_token, device_id):
@@ -753,15 +757,15 @@ class TestOlarmFlowClient:
         client._event_loop = mock_event_loop
         client.start_mqtt(user_id)
 
-        # Set reconnection callback
-        reconnect_callback = MagicMock()
-        client.set_mqtt_reconnection_callback(reconnect_callback)
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
 
         # Simulate disconnect with authorization error (rc=5)
         client._mqtt_on_disconnect(mock_client_instance, None, 5)
 
         # With event loop, should use thread-safe scheduling
-        mock_event_loop.call_soon_threadsafe.assert_called_once_with(reconnect_callback)
+        mock_event_loop.call_soon_threadsafe.assert_called_once()
 
     @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_disconnect_without_event_loop(
@@ -774,15 +778,17 @@ class TestOlarmFlowClient:
 
         client.start_mqtt(user_id)
 
-        # Set reconnection callback
-        reconnect_callback = MagicMock()
-        client.set_mqtt_reconnection_callback(reconnect_callback)
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
 
         # Simulate disconnect with authorization error (rc=4)
         client._mqtt_on_disconnect(mock_client_instance, None, 4)
 
         # Without event loop, callback should be called directly
-        reconnect_callback.assert_called_once()
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "reconnecting"
 
     @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     def test_mqtt_on_disconnect_no_callback(
@@ -800,3 +806,221 @@ class TestOlarmFlowClient:
         # Simulate disconnect with authorization error (rc=4)
         # Should not raise any error
         client._mqtt_on_disconnect(mock_client_instance, None, 4)
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_failure_increments_counter(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect with failure increments failure counter."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Simulate connection failure
+        client._mqtt_on_connect(mock_client_instance, None, {}, 3)
+
+        assert client._mqtt_retries == 1
+
+        # Simulate another failure
+        client._mqtt_on_connect(mock_client_instance, None, {}, 3)
+
+        assert client._mqtt_retries == 2
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_success_resets_counter(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect with success resets failure counter."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Simulate some failures
+        client._mqtt_retries = 2
+
+        # Simulate successful connection
+        client._mqtt_on_connect(mock_client_instance, None, {}, 0)
+
+        assert client._mqtt_retries == 0
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_success_triggers_connected_status(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect triggers 'connected' status callback."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        # Simulate successful connection
+        client._mqtt_on_connect(mock_client_instance, None, {}, 0)
+
+        # Callback should be called with "connected"
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "connected"
+        assert args[1] == {}
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_triggers_disconnected_after_max_failures(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect triggers 'disconnected' status after max consecutive failures."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        # Simulate 3 consecutive connection failures (max threshold)
+        for i in range(3):
+            client._mqtt_on_connect(mock_client_instance, None, {}, 3)
+
+        # Callback should be called on the 3rd failure with "disconnected"
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "disconnected"
+        assert "server unavailable" in args[1]["reason"].lower()
+        assert args[1]["rc"] == 3
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_triggers_disconnected_on_unrecoverable_error(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect triggers 'disconnected' status immediately for unrecoverable errors."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        # Simulate unrecoverable error (protocol version)
+        client._mqtt_on_connect(mock_client_instance, None, {}, 1)
+
+        # Callback should be called immediately with "disconnected"
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "disconnected"
+        assert "protocol version" in args[1]["reason"].lower()
+        assert args[1]["rc"] == 1
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_connect_no_callback_set(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_connect without callback set doesn't raise error."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Don't set any callback
+
+        # Simulate connection failure - should not raise any error
+        for i in range(5):
+            client._mqtt_on_connect(mock_client_instance, None, {}, 3)
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_triggers_disconnected_on_unrecoverable_error(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect triggers 'disconnected' status for unrecoverable errors."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        # Simulate unrecoverable disconnect error (TLS failure)
+        client._mqtt_on_disconnect(mock_client_instance, None, 6)
+
+        # Callback should be called with "disconnected"
+        status_callback.assert_called_once()
+        args = status_callback.call_args[0]
+        assert args[0] == "disconnected"
+        assert "tls" in args[1]["reason"].lower()
+        assert args[1]["rc"] == 6
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_clean_disconnect_resets_counter(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect with clean disconnect resets failure counter."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set some failures
+        client._mqtt_retries = 2
+
+        # Simulate clean disconnect (rc=0)
+        client._mqtt_on_disconnect(mock_client_instance, None, 0)
+
+        assert client._mqtt_retries == 0
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_on_disconnect_with_event_loop_uses_threadsafe(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test MQTT on_disconnect with event loop uses thread-safe callback for failures."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+        mock_event_loop = MagicMock()
+
+        client._event_loop = mock_event_loop
+        client.start_mqtt(user_id)
+
+        # Set status callback
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        # Simulate unrecoverable disconnect error (invalid client ID)
+        client._mqtt_on_disconnect(mock_client_instance, None, 2)
+
+        # With event loop, should use thread-safe scheduling
+        mock_event_loop.call_soon_threadsafe.assert_called_once()
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_stop_mqtt_resets_failure_counter(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test stop_mqtt resets failure counter."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Set some failures
+        client._mqtt_retries = 2
+
+        # Stop MQTT
+        client.stop_mqtt()
+
+        assert client._mqtt_retries == 0
