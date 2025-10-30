@@ -680,7 +680,7 @@ class OlarmFlowClient:
         elif self._mqtt_retries >= self._mqtt_retries_before_disconnect:
             # Max retries reached, trigger "disconnected"
             _LOGGER.error(
-                "MQTT connection failed permanently: %s (retries: %d)",
+                "MQTT reconnections failed: %s (retries: %d)",
                 reason,
                 self._mqtt_retries,
             )
@@ -690,6 +690,15 @@ class OlarmFlowClient:
             # Auth-related errors may be recoverable (e.g., token rotation)
             _LOGGER.debug("MQTT needs to reconnect (possibly refresh token)")
             self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
+
+        else:
+            # All other errors 
+            _LOGGER.debug(
+                "MQTT connection lost: %s (retries: %d)",
+                reason,
+                self._mqtt_retries,
+            )
+            self._call_status_callback("disconnected", {"reason": reason, "rc": rc})
 
     def subscribe_to_device(
         self, device_id: str, callback: Callable[[str, dict[str, Any]], None]
