@@ -505,6 +505,10 @@ class OlarmFlowClient:
         """Pulse an Olarm MAX output."""
         return await self._api_send_action(device_id, "max-io-pulse", output_num)
 
+    async def send_user_panic(self, device_id: str) -> dict[str, Any]:
+        """Send User Panic."""
+        return await self._api_send_action(device_id, "user-panic", 0)
+
     def start_mqtt(
         self,
         user_id: str,
@@ -692,7 +696,7 @@ class OlarmFlowClient:
             self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
 
         else:
-            # All other errors 
+            # All other errors
             _LOGGER.debug(
                 "MQTT connection lost: %s (retries: %d)",
                 reason,
