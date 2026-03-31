@@ -1,5 +1,6 @@
 """OlarmFlowClient - An async Python client for connecting to Olarm services."""
 
+from .const import ZonesTypes
 from .olarmflowclient import (
     OlarmFlowClientApiError,
     TokenExpired,
@@ -24,4 +25,5 @@ __all__ = [
     "MqttConnectError",
     "MqttTimeoutError",
     "OlarmFlowClient",
+    "ZonesTypes",
 ]
