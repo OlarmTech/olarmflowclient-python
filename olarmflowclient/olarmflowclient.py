@@ -373,6 +373,13 @@ class OlarmFlowClient:
         action_cmd = f"area-part-arm-{part_num}"
         return await self._api_send_action(device_id, action_cmd, area_num)
 
+    async def send_device_area_custom_arm(
+        self, device_id: str, area_num: int, part_num: int
+    ) -> dict[str, Any]:
+        """Arm a device area with custom partial profile (Olarm ONE HUB)."""
+        action_cmd = f"area-custom-arm-{part_num}"
+        return await self._api_send_action(device_id, action_cmd, area_num)
+
     async def send_device_area_stay(
         self, device_id: str, area_num: int
     ) -> dict[str, Any]:
