@@ -26,9 +26,30 @@ class OlarmFlowClientApiError(Exception):
 
     # Standard HTTP error descriptions
     HTTP_ERROR_DESCRIPTIONS = {
+        400: "Bad request",
+        401: "Access token expired",
         403: "Unauthorized",
+        404: "Not found",
         429: "Request was rate limited",
         500: "Olarm server error",
+        502: "Olarm service temporarily unavailable",
+        503: "Olarm service temporarily unavailable",
+        504: "Gateway timeout reaching the Olarm service - network issue or service under load",
+    }
+
+    # Descriptions for machine-readable error codes returned by the Olarm API.
+    # Used as a fallback when the server response body lacks a message
+    # (e.g. older deployed API versions).
+    ERROR_CODE_DESCRIPTIONS = {
+        "tokenExpired": "Your access token has expired. Please refresh the token or sign in again.",
+        "tokenInvalid": "The access token is invalid or malformed. Please sign in again.",
+        "sessionFailed": "Your session could not be loaded or has been revoked. Please sign in again.",
+        "rateLimited": "Too many requests. Please wait a few seconds and try again.",
+        "originNotAllowed": "The request origin is not allowed. This is often caused by a proxy or firewall rewriting request headers.",
+        "hostNotAllowed": "The request host is not allowed. This is often caused by a proxy or firewall rewriting request headers.",
+        "insufficientScope": "This token does not have permission to access this endpoint.",
+        "apiAccessNotAllowed": "This endpoint is not available via the public API.",
+        "authFailed": "Authentication failed. Please sign in again.",
     }
 
     def __init__(
@@ -36,69 +57,134 @@ class OlarmFlowClientApiError(Exception):
         message: str,
         status_code: int | None = None,
         response_text: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        req_id: str | None = None,
+        retry_after: int | None = None,
     ) -> None:
         """Initialize the API error."""
         super().__init__(message)
         self.status_code = status_code
         self.response_text = response_text
+        self.error_code = error_code
+        self.error_message = error_message
+        self.req_id = req_id
+        self.retry_after = retry_after
 
     def __str__(self) -> str:
         """Return string representation of the error."""
-        if self.status_code:
-            error_desc = self.HTTP_ERROR_DESCRIPTIONS.get(self.status_code, "")
-            if error_desc:
-                return f"API Error {self.status_code} ({error_desc}): {super().__str__()} - {self.response_text}"
-            return f"API Error {self.status_code}: {super().__str__()} - {self.response_text}"
-        return super().__str__()
+        if not self.status_code:
+            return super().__str__()
+
+        # Prefer the specific error code over the generic HTTP description
+        error_desc = self.HTTP_ERROR_DESCRIPTIONS.get(self.status_code, "")
+        label = f"API Error {self.status_code}"
+        if self.error_code:
+            label += f" ({self.error_code})"
+        elif error_desc:
+            label += f" ({error_desc})"
+
+        # Prefer the server-supplied message, then the local code description
+        detail = self.error_message or self.ERROR_CODE_DESCRIPTIONS.get(
+            self.error_code or "", ""
+        )
+        parts = [f"{label}: {super().__str__()}"]
+        if detail:
+            parts.append(detail)
+        elif self.response_text:
+            parts.append(self.response_text)
+        result = " - ".join(parts)
+        if self.req_id:
+            result += f" [reqId={self.req_id}]"
+        return result
 
 
 class TokenExpired(OlarmFlowClientApiError):
     """Raised when the access token has expired (401)."""
 
-    def __init__(self, message: str = "Access token has expired") -> None:
+    def __init__(
+        self, message: str = "Access token has expired", **kwargs: Any
+    ) -> None:
         """Initialize the token expired error."""
-        super().__init__(message, status_code=401)
+        kwargs.setdefault("status_code", 401)
+        super().__init__(message, **kwargs)
 
 
 class Unauthorized(OlarmFlowClientApiError):
     """Raised when the request is unauthorized (403)."""
 
-    def __init__(self, message: str = "Unauthorized access") -> None:
+    def __init__(self, message: str = "Unauthorized access", **kwargs: Any) -> None:
         """Initialize the unauthorized error."""
-        super().__init__(message, status_code=403)
+        kwargs.setdefault("status_code", 403)
+        super().__init__(message, **kwargs)
 
 
 class DeviceNotFound(OlarmFlowClientApiError):
     """Raised when a specific device is not found or not accessible (404, 403)."""
 
-    def __init__(self, device_id: str | None = None) -> None:
+    def __init__(self, device_id: str | None = None, **kwargs: Any) -> None:
         """Initialize the device not found error."""
         message = f"Device '{device_id}' not found" if device_id else "Device not found"
-        super().__init__(message, status_code=404)
+        kwargs.setdefault("status_code", 404)
+        super().__init__(message, **kwargs)
 
 
 class DevicesNotFound(OlarmFlowClientApiError):
     """Raised when no devices are found for the account (404)."""
 
-    def __init__(self, message: str = "No devices found for this account") -> None:
+    def __init__(
+        self, message: str = "No devices found for this account", **kwargs: Any
+    ) -> None:
         """Initialize the devices not found error."""
-        super().__init__(message, status_code=404)
+        kwargs.setdefault("status_code", 404)
+        super().__init__(message, **kwargs)
 
 
 class ServerError(OlarmFlowClientApiError):
     """Raised when the server returns an internal error (500)."""
 
-    def __init__(self, message: str = "Server internal error") -> None:
+    def __init__(self, message: str = "Server internal error", **kwargs: Any) -> None:
         """Initialize the server error."""
-        super().__init__(message, status_code=500)
+        kwargs.setdefault("status_code", 500)
+        super().__init__(message, **kwargs)
+
+
+class ServiceUnavailable(OlarmFlowClientApiError):
+    """Raised when the Olarm service is unreachable via the gateway (502, 503, 504)."""
+
+    def __init__(
+        self,
+        message: str = "Olarm service temporarily unavailable",
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the service unavailable error."""
+        kwargs.setdefault("status_code", 503)
+        super().__init__(message, **kwargs)
 
 
 class RateLimited(OlarmFlowClientApiError):
     """Raised when the request is rate limited (429)."""
 
-    def __init__(self, message: str = "Too many requests - rate limited") -> None:
+    def __init__(
+        self, message: str = "Too many requests - rate limited", **kwargs: Any
+    ) -> None:
         """Initialize the rate limited error."""
-        super().__init__(message, status_code=429)
+        kwargs.setdefault("status_code", 429)
+        super().__init__(message, **kwargs)
+
+
+class OlarmFlowClientConnectionError(OlarmFlowClientApiError):
+    """Raised when the Olarm API cannot be reached at all.
+
+    Covers client-side network failures: DNS resolution, TLS issues,
+    firewalls blocking outbound HTTPS, connection resets and timeouts.
+    """
+
+    def __init__(
+        self, message: str = "Unable to connect to the Olarm API", **kwargs: Any
+    ) -> None:
+        """Initialize the connection error."""
+        super().__init__(message, **kwargs)
 
 
 class MqttConnectError(OlarmFlowClientApiError):
@@ -213,10 +299,45 @@ class OlarmFlowClient:
             async with self._api_session.request(method, url, **kwargs) as response:
                 if response.status != 200:
                     text = await response.text()
+
+                    # Extract error detail from the response body (tolerate
+                    # non-JSON bodies, e.g. HTML from the gateway on 502/504)
+                    error_code: str | None = None
+                    error_message: str | None = None
+                    req_id: str | None = None
+                    try:
+                        body = json.loads(text)
+                        if isinstance(body, dict):
+                            error_code = body.get("error") or (
+                                body["errors"][0]
+                                if isinstance(body.get("errors"), list)
+                                and body["errors"]
+                                else None
+                            )
+                            error_message = body.get("message")
+                            req_id = body.get("reqId")
+                    except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+                        pass
+
+                    # Headers take precedence as they survive body rewrites
+                    error_code = response.headers.get("X-Olarm-Auth-Error", error_code)
+                    req_id = response.headers.get("X-Olarm-Req-Id", req_id)
+                    retry_after: int | None = None
+                    retry_after_header = response.headers.get("Retry-After")
+                    if retry_after_header is not None:
+                        try:
+                            retry_after = int(retry_after_header)
+                        except ValueError:
+                            retry_after = None
+
                     raise OlarmFlowClientApiError(
                         "Request failed",
                         status_code=response.status,
                         response_text=text,
+                        error_code=error_code,
+                        error_message=error_message,
+                        req_id=req_id,
+                        retry_after=retry_after,
                     )
 
                 if "application/json" in response.headers.get("Content-Type", ""):
@@ -225,7 +346,9 @@ class OlarmFlowClient:
                     result = await response.text()
 
         except aiohttp.ClientError as e:
-            raise OlarmFlowClientApiError(f"API request failed: {e!s}") from e
+            raise OlarmFlowClientConnectionError(
+                f"Unable to connect to the Olarm API: {e!s}"
+            ) from e
         finally:
             await self._api_close()
 
@@ -254,14 +377,27 @@ class OlarmFlowClient:
 
     def _handle_api_error(self, err: OlarmFlowClientApiError) -> None:
         """Handle common API errors by raising specific exceptions."""
-        if err.status_code == 401:
-            raise TokenExpired() from err
+        # Preserve the original error detail on the specific exception
+        detail: dict[str, Any] = {
+            "status_code": err.status_code,
+            "response_text": err.response_text,
+            "error_code": err.error_code,
+            "error_message": err.error_message,
+            "req_id": err.req_id,
+            "retry_after": err.retry_after,
+        }
+        if err.status_code == 401 or err.error_code == "tokenExpired":
+            # Older deployed API versions report expired tokens as 403 with
+            # an error code, so match on the code as well
+            raise TokenExpired(**detail) from err
         elif err.status_code == 403:
-            raise Unauthorized() from err
+            raise Unauthorized(**detail) from err
         elif err.status_code == 429:
-            raise RateLimited() from err
+            raise RateLimited(**detail) from err
         elif err.status_code == 500:
-            raise ServerError() from err
+            raise ServerError(**detail) from err
+        elif err.status_code in (502, 503, 504):
+            raise ServiceUnavailable(**detail) from err
         else:
             # Re-raise original error for other status codes
             raise err
