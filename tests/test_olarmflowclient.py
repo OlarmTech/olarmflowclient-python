@@ -15,6 +15,8 @@ from olarmflowclient import (
     DevicesNotFound,
     RateLimited,
     ServerError,
+    ServiceUnavailable,
+    OlarmFlowClientConnectionError,
     MqttConnectError,
     MqttTimeoutError,
 )
@@ -97,9 +99,22 @@ class TestOlarmFlowClient:
     def test_api_error(self):
         """Test OlarmFlowClientApiError initialization and string representation."""
         error = OlarmFlowClientApiError("Test error", 400, "Bad request")
-        assert "API Error 400: Test error - Bad request" in str(error)
+        assert "API Error 400 (Bad request): Test error - Bad request" in str(error)
         assert error.status_code == 400
         assert error.response_text == "Bad request"
+
+        # Test with server-supplied error code, message and reqId
+        detailed_error = OlarmFlowClientApiError(
+            "Request failed",
+            status_code=403,
+            response_text='{"error":"tokenExpired"}',
+            error_code="tokenExpired",
+            error_message="Your access token has expired.",
+            req_id="jwtapi-Xk3fPq9Z-1.2.3.4-a3f9c1",
+        )
+        assert "API Error 403 (tokenExpired)" in str(detailed_error)
+        assert "Your access token has expired." in str(detailed_error)
+        assert "[reqId=jwtapi-Xk3fPq9Z-1.2.3.4-a3f9c1]" in str(detailed_error)
 
         # Test without status code
         simple_error = OlarmFlowClientApiError("Simple error")
@@ -293,10 +308,26 @@ class TestOlarmFlowClient:
             mock_request.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_get_devices_service_unavailable(self, access_token):
+        """Test get_devices maps 502/503/504 to ServiceUnavailable."""
+        client = OlarmFlowClient(access_token)
+        api_error = OlarmFlowClientApiError("Bad gateway", 502, "Gateway error")
+
+        with patch.object(
+            client, "_api_make_request", side_effect=api_error
+        ) as mock_request:
+            with pytest.raises(ServiceUnavailable) as exc_info:
+                await client.get_devices()
+
+            assert exc_info.value.__cause__ == api_error
+            assert exc_info.value.status_code == 502
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_get_devices_other_errors_passthrough(self, access_token):
         """Test get_devices method passes through other status codes."""
         client = OlarmFlowClient(access_token)
-        api_error = OlarmFlowClientApiError("Bad gateway", 502, "Gateway error")
+        api_error = OlarmFlowClientApiError("Teapot", 418, "I'm a teapot")
 
         with patch.object(
             client, "_api_make_request", side_effect=api_error
@@ -306,7 +337,7 @@ class TestOlarmFlowClient:
 
             # Should be the same error object for unhandled status codes
             assert exc_info.value == api_error
-            assert exc_info.value.status_code == 502
+            assert exc_info.value.status_code == 418
             mock_request.assert_called_once()
 
     @pytest.mark.asyncio

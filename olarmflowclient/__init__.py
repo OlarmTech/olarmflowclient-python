@@ -3,12 +3,14 @@
 from .const import ZonesTypes
 from .olarmflowclient import (
     OlarmFlowClientApiError,
+    OlarmFlowClientConnectionError,
     TokenExpired,
     Unauthorized,
     DeviceNotFound,
     DevicesNotFound,
     RateLimited,
     ServerError,
+    ServiceUnavailable,
     MqttConnectError,
     MqttTimeoutError,
     OlarmFlowClient,
@@ -16,12 +18,14 @@ from .olarmflowclient import (
 
 __all__ = [
     "OlarmFlowClientApiError",
+    "OlarmFlowClientConnectionError",
     "TokenExpired",
     "Unauthorized",
     "DeviceNotFound",
     "DevicesNotFound",
     "RateLimited",
     "ServerError",
+    "ServiceUnavailable",
     "MqttConnectError",
     "MqttTimeoutError",
     "OlarmFlowClient",
