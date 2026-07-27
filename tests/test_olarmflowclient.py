@@ -99,7 +99,7 @@ class TestOlarmFlowClient:
     def test_api_error(self):
         """Test OlarmFlowClientApiError initialization and string representation."""
         error = OlarmFlowClientApiError("Test error", 400, "Bad request")
-        assert "API Error 400 (Bad request): Test error - Bad request" in str(error)
+        assert str(error) == "API Error 400 (Bad request): Test error"
         assert error.status_code == 400
         assert error.response_text == "Bad request"
 
@@ -115,6 +115,16 @@ class TestOlarmFlowClient:
         assert "API Error 403 (tokenExpired)" in str(detailed_error)
         assert "Your access token has expired." in str(detailed_error)
         assert "[reqId=jwtapi-Xk3fPq9Z-1.2.3.4-a3f9c1]" in str(detailed_error)
+
+        # An HTML gateway body must never reach the user-facing string
+        gateway_error = ServiceUnavailable(
+            status_code=502,
+            response_text="<html><head><title>502 Bad Gateway</title></head></html>",
+        )
+        assert str(gateway_error) == (
+            "API Error 502: Olarm service temporarily unavailable"
+        )
+        assert gateway_error.response_text is not None
 
         # Test without status code
         simple_error = OlarmFlowClientApiError("Simple error")
@@ -178,6 +188,15 @@ class TestOlarmFlowClient:
         assert "Too many requests - rate limited" in str(error)
         assert "API Error 429" in str(error)
         assert error.status_code == 429
+        assert isinstance(error, OlarmFlowClientApiError)
+
+    def test_connection_error(self):
+        """Test OlarmFlowClientConnectionError has no status code prefix."""
+        error = OlarmFlowClientConnectionError(
+            "Unable to connect to the Olarm API: DNS failure"
+        )
+        assert str(error) == "Unable to connect to the Olarm API: DNS failure"
+        assert error.status_code is None
         assert isinstance(error, OlarmFlowClientApiError)
 
     # Note: Direct _api_make_request tests removed due to complex aiohttp mocking requirements

@@ -72,28 +72,32 @@ class OlarmFlowClientApiError(Exception):
         self.retry_after = retry_after
 
     def __str__(self) -> str:
-        """Return string representation of the error."""
+        """Return string representation of the error.
+
+        The raw response body is deliberately left out: gateways return HTML
+        error pages and these strings are surfaced directly to end users.
+        Use `response_text` when the body is needed for diagnostics.
+        """
         if not self.status_code:
             return super().__str__()
+
+        message = super().__str__()
 
         # Prefer the specific error code over the generic HTTP description
         error_desc = self.HTTP_ERROR_DESCRIPTIONS.get(self.status_code, "")
         label = f"API Error {self.status_code}"
         if self.error_code:
             label += f" ({self.error_code})"
-        elif error_desc:
+        elif error_desc and error_desc != message:
             label += f" ({error_desc})"
 
         # Prefer the server-supplied message, then the local code description
         detail = self.error_message or self.ERROR_CODE_DESCRIPTIONS.get(
             self.error_code or "", ""
         )
-        parts = [f"{label}: {super().__str__()}"]
-        if detail:
-            parts.append(detail)
-        elif self.response_text:
-            parts.append(self.response_text)
-        result = " - ".join(parts)
+        result = f"{label}: {message}"
+        if detail and detail != message:
+            result += f" - {detail}"
         if self.req_id:
             result += f" [reqId={self.req_id}]"
         return result
@@ -329,6 +333,13 @@ class OlarmFlowClient:
                             retry_after = int(retry_after_header)
                         except ValueError:
                             retry_after = None
+
+                    _LOGGER.debug(
+                        "API request to %s failed with status %s: %s",
+                        endpoint,
+                        response.status,
+                        text,
+                    )
 
                     raise OlarmFlowClientApiError(
                         "Request failed",
