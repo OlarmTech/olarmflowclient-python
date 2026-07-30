@@ -974,7 +974,6 @@ class OlarmFlowClient:
         self, client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage
     ) -> None:
         """Handle messages received from the broker."""
-        _LOGGER.debug("MQTT: message received (topic=%s)", message.topic)
         try:
             payload = json.loads(message.payload.decode())
             if message.topic in self._mqtt_callbacks:
