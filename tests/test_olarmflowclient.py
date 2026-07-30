@@ -17,6 +17,7 @@ from olarmflowclient import (
     ServerError,
     ServiceUnavailable,
     OlarmFlowClientConnectionError,
+    MqttAuthError,
     MqttConnectError,
     MqttTimeoutError,
 )
@@ -747,13 +748,24 @@ class TestOlarmFlowClient:
         assert "timeout" in str(error).lower()
         assert isinstance(error, OlarmFlowClientApiError)
 
+    def test_mqtt_auth_error(self):
+        """Test MqttAuthError initialization and inheritance."""
+        error = MqttAuthError()
+        assert "authentication" in str(error).lower()
+        # Must remain a MqttConnectError subclass for backward compatibility
+        assert isinstance(error, MqttConnectError)
+        assert isinstance(error, OlarmFlowClientApiError)
+
+        custom_error = MqttAuthError("Custom auth error")
+        assert "Custom auth error" in str(custom_error)
+
     @pytest.mark.asyncio
     @patch("olarmflowclient.olarmflowclient.mqtt.Client")
     @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
     async def test_start_mqtt_async(
         self, mock_ssl_context, mock_mqtt_client, access_token, user_id
     ):
-        """Test start_mqtt_async method."""
+        """Test start_mqtt_async returns once the broker CONNACK arrives."""
         import asyncio
 
         client = OlarmFlowClient(access_token)
@@ -761,6 +773,11 @@ class TestOlarmFlowClient:
         mock_mqtt_client.return_value = mock_client_instance
         mock_ssl = MagicMock()
         mock_ssl_context.return_value = mock_ssl
+
+        # Deliver a successful CONNACK (rc=0) when the network loop starts
+        mock_client_instance.loop_start.side_effect = lambda: client._mqtt_on_connect(
+            mock_client_instance, None, {}, 0
+        )
 
         # Get actual event loop
         loop = asyncio.get_event_loop()
@@ -774,6 +791,153 @@ class TestOlarmFlowClient:
 
         # Verify MQTT client was created
         mock_mqtt_client.assert_called_once()
+
+        # No failure stored and no cleanup on the success path
+        assert client._mqtt_connect_error is None
+        mock_client_instance.loop_stop.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
+    async def test_start_mqtt_async_connack_timeout(
+        self, mock_ssl_context, mock_mqtt_client, access_token, user_id
+    ):
+        """Test start_mqtt_async raises MqttTimeoutError when no CONNACK arrives."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        loop = asyncio.get_event_loop()
+
+        # No CONNACK is ever delivered
+        with pytest.raises(MqttTimeoutError):
+            await client.start_mqtt_async(
+                user_id, "test_suffix", event_loop=loop, timeout=0.1
+            )
+
+        # The paho loop thread must be cleaned up on failure
+        mock_client_instance.loop_stop.assert_called_once()
+        mock_client_instance.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
+    async def test_start_mqtt_async_connack_refused(
+        self, mock_ssl_context, mock_mqtt_client, access_token, user_id
+    ):
+        """Test start_mqtt_async raises MqttConnectError on a refused CONNACK."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        # Simulate the broker refusing the connection (server unavailable)
+        mock_client_instance.loop_start.side_effect = lambda: client._mqtt_on_connect(
+            mock_client_instance, None, {}, 3
+        )
+
+        loop = asyncio.get_event_loop()
+
+        with pytest.raises(MqttConnectError) as exc_info:
+            await client.start_mqtt_async(
+                user_id, "test_suffix", event_loop=loop, timeout=30.0
+            )
+
+        assert "server unavailable" in str(exc_info.value).lower()
+        # Auth errors must not be raised for non-auth return codes
+        assert not isinstance(exc_info.value, MqttAuthError)
+
+        # The paho loop thread must be cleaned up on failure
+        mock_client_instance.loop_stop.assert_called_once()
+        mock_client_instance.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("rc", [4, 5])
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
+    async def test_start_mqtt_async_connack_auth_failure(
+        self, mock_ssl_context, mock_mqtt_client, access_token, user_id, rc
+    ):
+        """Test start_mqtt_async raises MqttAuthError on auth failures (rc=4/5)."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        mock_client_instance.loop_start.side_effect = lambda: client._mqtt_on_connect(
+            mock_client_instance, None, {}, rc
+        )
+
+        loop = asyncio.get_event_loop()
+
+        with pytest.raises(MqttAuthError):
+            await client.start_mqtt_async(
+                user_id, "test_suffix", event_loop=loop, timeout=30.0
+            )
+
+        # The paho loop thread must be cleaned up on failure
+        mock_client_instance.loop_stop.assert_called_once()
+        mock_client_instance.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    @patch("olarmflowclient.olarmflowclient.ssl.create_default_context")
+    async def test_start_mqtt_async_status_callbacks_preserved(
+        self, mock_ssl_context, mock_mqtt_client, access_token, user_id
+    ):
+        """Test start_mqtt_async still emits connecting/connected statuses."""
+        import asyncio
+
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        mock_client_instance.loop_start.side_effect = lambda: client._mqtt_on_connect(
+            mock_client_instance, None, {}, 0
+        )
+
+        loop = asyncio.get_event_loop()
+
+        await client.start_mqtt_async(
+            user_id, "test_suffix", event_loop=loop, timeout=30.0
+        )
+
+        # Callbacks are scheduled with call_soon_threadsafe; let them run
+        await asyncio.sleep(0)
+
+        statuses = [call.args[0] for call in status_callback.call_args_list]
+        assert statuses == ["connecting", "connected"]
+
+    @patch("olarmflowclient.olarmflowclient.mqtt.Client")
+    def test_mqtt_reconnect_connack_after_success_is_harmless(
+        self, mock_mqtt_client, access_token, user_id
+    ):
+        """Test later reconnect CONNACKs don't store a connect failure."""
+        client = OlarmFlowClient(access_token)
+        mock_client_instance = MagicMock()
+        mock_mqtt_client.return_value = mock_client_instance
+
+        client.start_mqtt(user_id)
+
+        # Initial successful CONNACK signals the event
+        client._mqtt_on_connect(mock_client_instance, None, {}, 0)
+        assert client._mqtt_connect_event.is_set()
+        assert client._mqtt_connect_error is None
+
+        # A later reconnect failure must not store a connect error
+        client._mqtt_on_connect(mock_client_instance, None, {}, 3)
+        assert client._mqtt_connect_error is None
+
+        # And a later reconnect success is equally harmless
+        client._mqtt_on_connect(mock_client_instance, None, {}, 0)
+        assert client._mqtt_connect_error is None
 
     @pytest.mark.asyncio
     async def test_start_mqtt_async_timeout(self, access_token, user_id):
