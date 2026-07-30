@@ -680,7 +680,6 @@ class OlarmFlowClient:
         self,
         user_id: str,
         client_id_suffix: str | None = "1",
-        event_loop: Any = None,
         timeout: float = 30.0,
     ) -> None:
         """Start the MQTT client and wait for the first connection.
@@ -694,7 +693,6 @@ class OlarmFlowClient:
         Args:
             user_id: Olarm user id, used to build the MQTT client id.
             client_id_suffix: Suffix for the MQTT client id.
-            event_loop: Deprecated and ignored; the running event loop is used.
             timeout: Seconds to wait for the first connection.
 
         Raises:
