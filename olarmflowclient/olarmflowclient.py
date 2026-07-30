@@ -3,37 +3,29 @@
 See https://www.olarm.com for more info.
 """
 
+import asyncio
 from collections.abc import Callable
 import json
 import logging
 import ssl
-import threading
 from typing import Any, Literal
 import urllib.parse
 
 import aiohttp
-import paho.mqtt.client as mqtt
+import aiomqtt
 
-from .const import BASE_URL, MQTT_HOST, MQTT_KEEPALIVE, MQTT_PORT, MQTT_USER
+from .const import (
+    BASE_URL,
+    MQTT_HOST,
+    MQTT_KEEPALIVE,
+    MQTT_PORT,
+    MQTT_USER,
+    MQTT_RETRIES_BEFORE_DISCONNECT,
+    MQTT_RECONNECT_BACKOFF_MAX,
+    MQTT_RECONNECT_BACKOFF_MIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-# Threshold: number of consecutive failures before emitting a "disconnected" status
-MQTT_RETRIES_BEFORE_DISCONNECT = 3
-
-# MQTT CONNACK / disconnect return code descriptions
-MQTT_RC_REASONS = {
-    1: "Connection refused - incorrect protocol version",
-    2: "Connection refused - invalid client identifier",
-    3: "Connection refused - server unavailable",
-    4: "Connection refused - bad username or password",
-    5: "Connection refused - not authorised",
-    6: "Connection refused - TLS handshake failed",
-    7: "Connection refused - possibly server closed connection",
-}
-
-# CONNACK return codes that indicate an authentication/authorization failure
-MQTT_AUTH_RC_CODES = {4, 5}
 
 
 class OlarmFlowClientApiError(Exception):
@@ -256,12 +248,9 @@ class OlarmFlowClient:
         self._api_session: aiohttp.ClientSession | None = None
 
         # mqtt client attributes (initialized to None)
-        self._mqtt_host: str | None = None
-        self._mqtt_port: int | None = None
-        self._mqtt_username: str | None = None
-        self._mqtt_password: str | None = None
         self._mqtt_clientId: str | None = None
-        self._mqtt_client: mqtt.Client | None = None
+        self._mqtt_client: aiomqtt.Client | None = None
+        self._mqtt_task: asyncio.Task[None] | None = None
         self._mqtt_callbacks: dict[str, Callable[[str, dict[str, Any]], None]] = {}
         self._mqtt_status_callback: (
             Callable[
@@ -275,11 +264,7 @@ class OlarmFlowClient:
         ) = None
         self._mqtt_retries: int = 0
         self._mqtt_retries_before_disconnect: int = mqtt_retries_before_disconnect
-        self._event_loop: Any = None
-
-        # Signaled from paho's thread on the first CONNACK; error holds the failure
-        self._mqtt_connect_event = threading.Event()
-        self._mqtt_connect_error: MqttConnectError | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
 
     async def __aenter__(self) -> "OlarmFlowClient":
         """Async context manager enter."""
@@ -443,16 +428,15 @@ class OlarmFlowClient:
             raise err
 
     async def update_access_token(self, access_token: str, expires_at: float) -> None:
-        """Update the access token."""
+        """Update the access token.
+
+        The MQTT reconnect loop reads the stored token immediately before every
+        connect attempt, so the new token is used automatically on the next
+        (re)connection.
+        """
         self._access_token = access_token
         self._expires_at = expires_at
         _LOGGER.debug("API: access token updated (expires_at=%s)", expires_at)
-
-        # Update MQTT password if MQTT client is active
-        if self._mqtt_client is not None:
-            self._mqtt_password = self._access_token
-            # Update the credentials for the MQTT client
-            self._mqtt_client.username_pw_set(self._mqtt_username, self._mqtt_password)
 
     async def get_devices(
         self,
@@ -692,66 +676,6 @@ class OlarmFlowClient:
         """Send User Panic."""
         return await self._api_send_action(device_id, "user-panic", 0)
 
-    def start_mqtt(
-        self,
-        user_id: str,
-        client_id_suffix: str | None = "1",
-    ) -> None:
-        """Start the MQTT client."""
-
-        # mqtt client
-        self._mqtt_host = MQTT_HOST
-        self._mqtt_port = MQTT_PORT
-        self._mqtt_username = MQTT_USER
-        self._mqtt_password = self._access_token
-        self._mqtt_clientId = f"{user_id}-{client_id_suffix}"
-
-        # Create SSL context
-        ssl_context = ssl.create_default_context()
-
-        # Initialize MQTT client with websockets transport
-        _LOGGER.debug("MQTT: starting client over websockets (client_id=%s, host=%s, port=%s)", self._mqtt_clientId, self._mqtt_host, self._mqtt_port)
-        self._mqtt_client = mqtt.Client(
-            client_id=self._mqtt_clientId, transport="websockets"
-        )
-        self._mqtt_client.tls_set_context(ssl_context)
-        self._mqtt_client.tls_insecure_set(False)
-
-        # Set websocket path and headers
-        self._mqtt_client.ws_set_options(
-            path="/mqtt",
-        )
-
-        # track callbacks for subscriptions
-        self._mqtt_callbacks = {}
-
-        # setup options
-        self._mqtt_client.username_pw_set(self._mqtt_username, self._mqtt_password)
-        self._mqtt_client.reconnect_delay_set(min_delay=4, max_delay=60)
-
-        # Set up callbacks before connecting
-        self._mqtt_client.on_connect = self._mqtt_on_connect
-        self._mqtt_client.on_disconnect = self._mqtt_on_disconnect
-        self._mqtt_client.on_message = self._mqtt_on_message
-
-        # Reset first-CONNACK tracking for this connection attempt
-        self._mqtt_connect_event.clear()
-        self._mqtt_connect_error = None
-
-        # connect to the broker using connect_async for non-blocking connection
-        try:
-            # Notify that we are starting the connection process
-            self._call_status_callback("connecting", {})
-            self._mqtt_client.connect_async(
-                self._mqtt_host, self._mqtt_port, keepalive=MQTT_KEEPALIVE
-            )
-            self._mqtt_client.loop_start()
-
-        except Exception as e:
-            # Debug level only: the raised exception is the caller's to report
-            _LOGGER.debug("MQTT: failed to initiate connection to broker: %s", e)
-            raise MqttConnectError(f"Failed to connect to MQTT broker: {e}") from e
-
     async def start_mqtt_async(
         self,
         user_id: str,
@@ -759,12 +683,19 @@ class OlarmFlowClient:
         event_loop: Any = None,
         timeout: float = 30.0,
     ) -> None:
-        """Start the MQTT client asynchronously with thread-safe handling.
+        """Start the MQTT client and wait for the first connection.
 
-        Waits for the broker's CONNACK before returning, so connection and
-        authentication failures surface here instead of only being reported
-        via the status callback. On any failure the paho network loop is
-        stopped before raising, so no background thread is leaked.
+        Performs the first connect (and subscribe of any registered topics)
+        before returning, so connection and authentication failures surface
+        here. On success a background reconnect loop keeps the connection
+        alive, re-authenticating with the current access token and
+        re-subscribing on every reconnect.
+
+        Args:
+            user_id: Olarm user id, used to build the MQTT client id.
+            client_id_suffix: Suffix for the MQTT client id.
+            event_loop: Deprecated and ignored; the running event loop is used.
+            timeout: Seconds to wait for the first connection.
 
         Raises:
             MqttAuthError: If the broker refuses the connection due to bad
@@ -772,61 +703,128 @@ class OlarmFlowClient:
             MqttConnectError: If connection to MQTT broker fails.
             MqttTimeoutError: If connection times out.
         """
-        import asyncio
+        if self._mqtt_task is not None and not self._mqtt_task.done():
+            _LOGGER.debug("MQTT: client already running")
+            return
 
-        # Store event loop for thread-safe callbacks
-        if event_loop is not None:
-            self._event_loop = event_loop
-        else:
-            self._event_loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        self._event_loop = loop
+        self._mqtt_clientId = f"{user_id}-{client_id_suffix}"
+        self._mqtt_retries = 0
 
-        # Run start_mqtt in executor with timeout
+        _LOGGER.debug(
+            "MQTT: starting client over websockets (client_id=%s, host=%s, port=%s)",
+            self._mqtt_clientId,
+            MQTT_HOST,
+            MQTT_PORT,
+        )
+
+        first_connect: asyncio.Future[None] = loop.create_future()
+        self._mqtt_task = loop.create_task(self._mqtt_loop(first_connect))
+
         try:
-            await asyncio.wait_for(
-                self._event_loop.run_in_executor(
-                    None, self.start_mqtt, user_id, client_id_suffix
-                ),
-                timeout=timeout,
-            )
+            await asyncio.wait_for(first_connect, timeout=timeout)
         except asyncio.TimeoutError as e:
             _LOGGER.debug("MQTT: connection timed out (timeout=%.0fs)", timeout)
             self.stop_mqtt()
             raise MqttTimeoutError("MQTT connection timeout") from e
         except MqttConnectError:
-            # Re-raise MQTT connect errors as-is
             self.stop_mqtt()
             raise
-        except Exception as e:
-            _LOGGER.debug("MQTT: failed to start client: %s", e)
-            self.stop_mqtt()
-            raise MqttConnectError(f"Failed to start MQTT client: {e}") from e
 
-        # Wait for the first CONNACK, signaled by _mqtt_on_connect
-        connack_received = await self._event_loop.run_in_executor(
-            None, self._mqtt_connect_event.wait, timeout
+    async def _mqtt_loop(self, first_connect: asyncio.Future[None]) -> None:
+        """Connect/reconnect loop following the aiomqtt reconnect pattern.
+
+        A fresh connection is built for every attempt using the *current*
+        access token, so tokens rotated via ``update_access_token()`` are
+        picked up automatically.
+        """
+        try:
+            while True:
+                self._call_status_callback("connecting", {})
+                try:
+                    async with self._make_mqtt_client() as client:
+                        self._mqtt_client = client
+                        for topic in self._mqtt_callbacks:
+                            _LOGGER.debug("MQTT: (re)subscribing (topic=%s)", topic)
+                            await client.subscribe(topic)
+                        self._mqtt_retries = 0
+                        _LOGGER.debug("MQTT: connected to broker")
+                        if not first_connect.done():
+                            first_connect.set_result(None)
+                        self._call_status_callback("connected", {})
+                        async for message in client.messages:
+                            self._mqtt_dispatch(str(message.topic), message.payload)
+                except aiomqtt.MqttError as err:
+                    self._mqtt_client = None
+                    if not first_connect.done():
+                        # First connect failed: surface the error through
+                        # start_mqtt_async() and don't retry
+                        first_connect.set_exception(self._map_mqtt_error(err))
+                        return
+                    self._mqtt_retries += 1
+                    reason = str(err)
+                    if self._mqtt_retries >= self._mqtt_retries_before_disconnect:
+                        _LOGGER.error(
+                            "MQTT: connection lost (retries=%d): %s",
+                            self._mqtt_retries,
+                            reason,
+                        )
+                        self._call_status_callback("disconnected", {"reason": reason})
+                    else:
+                        _LOGGER.debug(
+                            "MQTT: connection lost, reconnecting (retries=%d): %s",
+                            self._mqtt_retries,
+                            reason,
+                        )
+                        self._call_status_callback("reconnecting", {"reason": reason})
+                    delay = min(
+                        MQTT_RECONNECT_BACKOFF_MIN * 2 ** (self._mqtt_retries - 1),
+                        MQTT_RECONNECT_BACKOFF_MAX,
+                    )
+                    await asyncio.sleep(delay)
+        finally:
+            self._mqtt_client = None
+
+    def _make_mqtt_client(self) -> aiomqtt.Client:
+        """Build a new aiomqtt client using the current access token."""
+        return aiomqtt.Client(
+            hostname=MQTT_HOST,
+            port=MQTT_PORT,
+            username=MQTT_USER,
+            password=self._access_token,
+            identifier=self._mqtt_clientId,
+            transport="websockets",
+            websocket_path="/mqtt",
+            tls_context=ssl.create_default_context(),
+            keepalive=MQTT_KEEPALIVE,
         )
-        if not connack_received:
-            _LOGGER.debug("MQTT: timed out waiting for CONNACK (timeout=%.0fs)", timeout)
-            self.stop_mqtt()
-            raise MqttTimeoutError("MQTT connection timeout")
 
-        connect_error = self._mqtt_connect_error
-        if connect_error is not None:
-            self.stop_mqtt()
-            raise connect_error
+    @staticmethod
+    def _map_mqtt_error(err: aiomqtt.MqttError) -> MqttConnectError:
+        """Translate an aiomqtt error into this library's exception hierarchy."""
+        if isinstance(err, aiomqtt.MqttCodeError):
+            rc = getattr(err.rc, "value", err.rc)
+            # CONNACK reason codes indicating an authentication/authorization
+            # failure: MQTT v3 codes (4: bad username/password, 5: not
+            # authorised) and their MQTT v5 equivalents (134, 135)
+            if rc in {4, 5, 134, 135}:
+                return MqttAuthError(f"MQTT authentication failed: {err}")
+        return MqttConnectError(f"MQTT connection failed: {err}")
 
     def stop_mqtt(self) -> None:
-        """Stop and disconnect MQTT."""
-        if self._mqtt_client is not None:
-            try:
-                self._mqtt_client.loop_stop()
-                self._mqtt_client.disconnect()
-                self._mqtt_retries = 0
-                _LOGGER.debug("MQTT: client stopped and disconnected")
-            except Exception as e:
-                _LOGGER.warning("MQTT: error while stopping client: %s", e)
-        else:
+        """Stop and disconnect MQTT.
+
+        Idempotent, safe to call from any thread and never blocks.
+        """
+        task = self._mqtt_task
+        self._mqtt_task = None
+        self._mqtt_retries = 0
+        if task is None or task.done():
             _LOGGER.debug("MQTT: client was not running")
+            return
+        task.get_loop().call_soon_threadsafe(task.cancel)
+        _LOGGER.debug("MQTT: client stopped")
 
     def set_mqtt_status_callback(
         self,
@@ -846,54 +844,15 @@ class OlarmFlowClient:
         status: Literal["connecting", "connected", "disconnected", "reconnecting"],
         info: dict[str, Any],
     ) -> None:
-        """Call the connection status callback in a thread-safe manner."""
+        """Call the connection status callback, shielding the loop from errors."""
         if self._mqtt_status_callback is None:
             return
-
-        # Use thread-safe scheduling if event loop is available
-        if self._event_loop is not None:
-            self._event_loop.call_soon_threadsafe(
-                self._mqtt_status_callback, status, info
+        try:
+            self._mqtt_status_callback(status, info)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "MQTT: status callback raised an exception (status=%s)", status
             )
-        else:
-            try:
-                self._mqtt_status_callback(status, info)
-            except (OSError, ValueError, TypeError):
-                _LOGGER.exception("MQTT: status callback raised an exception (status=%s)", status)
-
-    def _handle_connection_failure(self, rc: int, is_disconnect: bool = False) -> None:
-        """Handle connection failure and determine appropriate status.
-
-        Args:
-            rc: MQTT return code
-            is_disconnect: True if called from on_disconnect, False if from on_connect
-        """
-        reason = MQTT_RC_REASONS.get(rc, f"Unknown error (rc={rc})")
-
-        # Define error categories
-        unrecoverable_codes = {1, 2, 6}  # Protocol, client ID, TLS
-        auth_codes = {4, 5, 7}  # Bad credentials, not authorized, connection closed
-
-        # Determine status based on error code and retry count
-        if rc in unrecoverable_codes:
-            # Unrecoverable errors trigger immediate "disconnected"
-            _LOGGER.error("MQTT: unrecoverable error (rc=%d): %s", rc, reason)
-            self._call_status_callback("disconnected", {"reason": reason, "rc": rc})
-
-        elif self._mqtt_retries >= self._mqtt_retries_before_disconnect:
-            # Max retries reached, trigger "disconnected"
-            _LOGGER.error("MQTT: reconnect attempts exhausted (rc=%d, retries=%d): %s", rc, self._mqtt_retries, reason)
-            self._call_status_callback("disconnected", {"reason": reason, "rc": rc})
-
-        elif rc in auth_codes:
-            # Auth-related errors may be recoverable (e.g., token rotation)
-            _LOGGER.debug("MQTT: reconnecting, token refresh may be needed (rc=%d): %s", rc, reason)
-            self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
-
-        else:
-            # Network errors: report "reconnecting" until the retry threshold
-            _LOGGER.debug("MQTT: connection lost, reconnecting (rc=%d, retries=%d): %s", rc, self._mqtt_retries, reason)
-            self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
 
     def subscribe_to_device(
         self, device_id: str, callback: Callable[[str, dict[str, Any]], None]
@@ -904,81 +863,47 @@ class OlarmFlowClient:
     def _mqtt_subscribe(
         self, topic: str, callback: Callable[[str, dict[str, Any]], None]
     ) -> None:
-        """Subscribe to a topic and register a callback."""
+        """Register a topic callback and subscribe if currently connected.
+
+        If not connected, the reconnect loop subscribes to all registered
+        topics on the next (re)connect.
+        """
         self._mqtt_callbacks[topic] = callback
-        # Only attempt to subscribe if the client is currently connected.
-        # If not connected, the subscription will happen in _on_connect.
-        if self._mqtt_client is not None and self._mqtt_client.is_connected():
+        client = self._mqtt_client
+        loop = self._event_loop
+        if client is not None and loop is not None:
             _LOGGER.debug("MQTT: subscribing (topic=%s)", topic)
-            self._mqtt_client.subscribe(topic)
+            loop.call_soon_threadsafe(
+                lambda: loop.create_task(self._mqtt_subscribe_now(client, topic))
+            )
         else:
-            _LOGGER.debug("MQTT: subscription queued until client connects (topic=%s)", topic)
+            _LOGGER.debug(
+                "MQTT: subscription queued until client connects (topic=%s)", topic
+            )
 
-    def _mqtt_on_connect(
-        self, client: mqtt.Client, userdata: Any, flags: dict[str, Any], rc: int
-    ) -> None:
-        """Handle connection to the broker."""
-        if rc == 0:
-            _LOGGER.debug("MQTT: connected to broker")
-            # Reset retry counter on successful connection
-            self._mqtt_retries = 0
-            # Resubscribe to all topics in callback registry on reconnect
-            if self._mqtt_client is not None:
-                for topic in self._mqtt_callbacks:
-                    _LOGGER.debug("MQTT: (re)subscribing (topic=%s)", topic)
-                    self._mqtt_client.subscribe(topic)
-
-            # Notify callback of successful connection
-            self._call_status_callback("connected", {})
-
-            # Wake the start_mqtt_async() waiter; no-op on later reconnects
-            self._mqtt_connect_event.set()
-        else:
-            # _handle_connection_failure below logs at the appropriate level
-            _LOGGER.debug("MQTT: broker refused connection (rc=%d): %s", rc, MQTT_RC_REASONS.get(rc, "Unknown error"))
-            # Increment retry counter
-            self._mqtt_retries += 1
-
-            # Fail the initial start_mqtt_async() wait fast; no-op after first CONNACK
-            if not self._mqtt_connect_event.is_set():
-                reason = MQTT_RC_REASONS.get(rc, f"Unknown error (rc={rc})")
-                if rc in MQTT_AUTH_RC_CODES:
-                    self._mqtt_connect_error = MqttAuthError(
-                        f"MQTT connection refused: {reason}"
-                    )
-                else:
-                    self._mqtt_connect_error = MqttConnectError(
-                        f"MQTT connection refused: {reason}"
-                    )
-                self._mqtt_connect_event.set()
-
-            # Handle the failure using consolidated logic
-            self._handle_connection_failure(rc, is_disconnect=False)
-
-    def _mqtt_on_disconnect(self, client: mqtt.Client, userdata: Any, rc: int) -> None:
-        """Handle disconnection from the broker."""
-        if rc == 0:
-            # Clean disconnect (user initiated)
-            _LOGGER.debug("MQTT: disconnected from broker (clean disconnect)")
-            # Reset retry counter on clean disconnect
-            self._mqtt_retries = 0
-        else:
-            # Unexpected disconnect
-            _LOGGER.warning("MQTT: unexpected disconnect from broker (rc=%d): %s", rc, MQTT_RC_REASONS.get(rc, "Unknown error"))
-            # Increment retry counter on unexpected disconnect
-            self._mqtt_retries += 1
-            # Handle the failure using consolidated logic
-            self._handle_connection_failure(rc, is_disconnect=True)
-
-    def _mqtt_on_message(
-        self, client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage
-    ) -> None:
-        """Handle messages received from the broker."""
+    async def _mqtt_subscribe_now(self, client: aiomqtt.Client, topic: str) -> None:
+        """Subscribe to a topic on a live connection."""
         try:
-            payload = json.loads(message.payload.decode())
-            if message.topic in self._mqtt_callbacks:
-                self._mqtt_callbacks[message.topic](message.topic, payload)
-        except json.JSONDecodeError:
-            _LOGGER.error("MQTT: failed to decode message payload (topic=%s): %s", message.topic, message.payload)
-        except (ValueError, TypeError, KeyError):
-            _LOGGER.exception("MQTT: error processing message (topic=%s)", message.topic)
+            await client.subscribe(topic)
+        except aiomqtt.MqttError as err:
+            # The reconnect loop re-subscribes on the next connect
+            _LOGGER.debug("MQTT: live subscribe failed (topic=%s): %s", topic, err)
+
+    def _mqtt_dispatch(self, topic: str, payload: Any) -> None:
+        """Decode a message payload and dispatch it to the registered callback."""
+        callback = self._mqtt_callbacks.get(topic)
+        if callback is None:
+            return
+        try:
+            if isinstance(payload, (bytes, bytearray)):
+                payload = payload.decode()
+            data = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            _LOGGER.error(
+                "MQTT: failed to decode message payload (topic=%s): %s", topic, payload
+            )
+            return
+        try:
+            callback(topic, data)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("MQTT: error processing message (topic=%s)", topic)

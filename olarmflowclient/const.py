@@ -7,6 +7,9 @@ MQTT_HOST = "mqtt-pubapi.olarm.com"
 MQTT_PORT = 443
 MQTT_USER = "public-api-user-v1"
 MQTT_KEEPALIVE = 30
+MQTT_RETRIES_BEFORE_DISCONNECT = 3 # Consecutive retry failures before flagging as disconnected
+MQTT_RECONNECT_BACKOFF_MIN = 4.0
+MQTT_RECONNECT_BACKOFF_MAX = 60.0
 
 
 class ZonesTypes(IntEnum):
