@@ -213,7 +213,7 @@ class OlarmFlowClient:
     def __init__(
         self,
         access_token: str,
-        expires_at: int | None = None,
+        expires_at: float | None = None,
         mqtt_retries_before_disconnect: int = MQTT_RETRIES_BEFORE_DISCONNECT,
     ) -> None:
         """Initialize the Olarm Flow Client."""
@@ -413,7 +413,7 @@ class OlarmFlowClient:
             # Re-raise original error for other status codes
             raise err
 
-    async def update_access_token(self, access_token: str, expires_at: int) -> None:
+    async def update_access_token(self, access_token: str, expires_at: float) -> None:
         """Update the access token."""
         self._access_token = access_token
         self._expires_at = expires_at
@@ -850,13 +850,13 @@ class OlarmFlowClient:
             self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
 
         else:
-            # All other errors
+            # Network errors: report "reconnecting" until the retry threshold
             _LOGGER.debug(
                 "MQTT connection lost: %s (retries: %d)",
                 reason,
                 self._mqtt_retries,
             )
-            self._call_status_callback("disconnected", {"reason": reason, "rc": rc})
+            self._call_status_callback("reconnecting", {"reason": reason, "rc": rc})
 
     def subscribe_to_device(
         self, device_id: str, callback: Callable[[str, dict[str, Any]], None]

@@ -940,8 +940,10 @@ class TestOlarmFlowClient:
         for i in range(3):
             client._mqtt_on_connect(mock_client_instance, None, {}, 3)
 
-        # Callback should be called on the 3rd failure with "disconnected"
-        status_callback.assert_called_once()
+        # First two failures report "reconnecting", the 3rd "disconnected"
+        assert status_callback.call_count == 3
+        statuses = [call.args[0] for call in status_callback.call_args_list]
+        assert statuses == ["reconnecting", "reconnecting", "disconnected"]
         args = status_callback.call_args[0]
         assert args[0] == "disconnected"
         assert "server unavailable" in args[1]["reason"].lower()
