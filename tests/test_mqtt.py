@@ -85,8 +85,8 @@ def fake_mqtt(monkeypatch):
         return client
 
     monkeypatch.setattr(olarm_module.aiomqtt, "Client", factory)
-    monkeypatch.setattr(olarm_module, "MQTT_BACKOFF_MIN", 0.0)
-    monkeypatch.setattr(olarm_module, "MQTT_BACKOFF_MAX", 0.0)
+    monkeypatch.setattr(olarm_module, "MQTT_RECONNECT_BACKOFF_MIN", 0.0)
+    monkeypatch.setattr(olarm_module, "MQTT_RECONNECT_BACKOFF_MAX", 0.0)
     return Holder
 
 
