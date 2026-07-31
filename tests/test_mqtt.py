@@ -237,6 +237,34 @@ class TestMqtt:
         ]
         reconnecting_info = status_callback.call_args_list[2].args[1]
         assert "Connection lost" in reconnecting_info["reason"]
+        assert reconnecting_info["rc"] is None
+        assert reconnecting_info["auth"] is False
+
+        client.stop_mqtt()
+        await _settle()
+
+    async def test_reconnect_auth_refusal_flagged_in_info(
+        self, fake_mqtt, access_token, user_id
+    ):
+        """An auth-refused reconnect reports auth=True and the CONNACK rc."""
+        client = OlarmFlowClient(access_token)
+        status_callback = MagicMock()
+        client.set_mqtt_status_callback(status_callback)
+
+        await client.start_mqtt_async(user_id, timeout=5.0)
+
+        # Drop the connection, then refuse the reconnect with an auth error
+        fake_mqtt.script.append(AiomqttConnectError(5))
+        fake_mqtt.created[0].push_error(aiomqtt.MqttError("Connection lost"))
+        await _settle(steps=30)
+
+        infos = [
+            call.args[1]
+            for call in status_callback.call_args_list
+            if call.args[0] == "reconnecting"
+        ]
+        assert infos[0]["auth"] is False and infos[0]["rc"] is None
+        assert infos[1]["auth"] is True and infos[1]["rc"] == 5
 
         client.stop_mqtt()
         await _settle()
@@ -261,18 +289,18 @@ class TestMqtt:
     async def test_disconnected_status_after_retry_threshold(
         self, fake_mqtt, access_token, user_id
     ):
-        """Repeated failures report 'disconnected' after the retry threshold."""
+        """'disconnected' is reported once when crossing the retry threshold."""
         client = OlarmFlowClient(access_token, mqtt_retries_before_disconnect=2)
         status_callback = MagicMock()
         client.set_mqtt_status_callback(status_callback)
 
         await client.start_mqtt_async(user_id, timeout=5.0)
 
-        # Drop the connection (failure 1), then fail the next connect (failure 2),
-        # then recover
-        fake_mqtt.script.append(AiomqttConnectError(3))
+        # Drop the connection (failure 1), fail the next two connects
+        # (failures 2 and 3), then recover
+        fake_mqtt.script.extend([AiomqttConnectError(3), AiomqttConnectError(3)])
         fake_mqtt.created[0].push_error(aiomqtt.MqttError("Connection lost"))
-        await _settle(steps=30)
+        await _settle(steps=40)
 
         statuses = [call.args[0] for call in status_callback.call_args_list]
         assert statuses == [
@@ -280,7 +308,9 @@ class TestMqtt:
             "connected",
             "reconnecting",  # failure 1 (below threshold)
             "connecting",
-            "disconnected",  # failure 2 (threshold reached)
+            "disconnected",  # failure 2 (threshold crossed, reported once)
+            "connecting",
+            "reconnecting",  # failure 3 (beyond threshold, no repeat)
             "connecting",
             "connected",  # recovery
         ]
@@ -316,6 +346,23 @@ class TestMqtt:
         client = OlarmFlowClient(access_token)
         await client.start_mqtt_async(user_id, timeout=5.0)
         await client.start_mqtt_async(user_id, timeout=5.0)
+
+        assert len(fake_mqtt.created) == 1
+
+        client.stop_mqtt()
+        await _settle()
+
+    async def test_start_when_running_with_different_params_raises(
+        self, fake_mqtt, access_token, user_id
+    ):
+        """A second start with a different client id raises instead of no-op."""
+        client = OlarmFlowClient(access_token)
+        await client.start_mqtt_async(user_id, timeout=5.0)
+
+        with pytest.raises(RuntimeError, match="already running"):
+            await client.start_mqtt_async("other_user", timeout=5.0)
+        with pytest.raises(RuntimeError, match="already running"):
+            await client.start_mqtt_async(user_id, "other_suffix", timeout=5.0)
 
         assert len(fake_mqtt.created) == 1
 

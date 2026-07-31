@@ -251,6 +251,8 @@ class OlarmFlowClient:
         self._mqtt_clientId: str | None = None
         self._mqtt_client: aiomqtt.Client | None = None
         self._mqtt_task: asyncio.Task[None] | None = None
+        # Strong refs to fire-and-forget tasks so they aren't GC'd early
+        self._mqtt_bg_tasks: set[asyncio.Task[None]] = set()
         self._mqtt_callbacks: dict[str, Callable[[str, dict[str, Any]], None]] = {}
         self._mqtt_status_callback: (
             Callable[
@@ -700,8 +702,16 @@ class OlarmFlowClient:
                 credentials (subclass of MqttConnectError).
             MqttConnectError: If connection to MQTT broker fails.
             MqttTimeoutError: If connection times out.
+            RuntimeError: If already running with a different client id;
+                call stop_mqtt() first to change parameters.
         """
         if self._mqtt_task is not None and not self._mqtt_task.done():
+            requested_client_id = f"{user_id}-{client_id_suffix}"
+            if requested_client_id != self._mqtt_clientId:
+                raise RuntimeError(
+                    f"MQTT client already running as '{self._mqtt_clientId}'; "
+                    "call stop_mqtt() before starting with different parameters"
+                )
             _LOGGER.debug("MQTT: client already running")
             return
 
@@ -724,6 +734,9 @@ class OlarmFlowClient:
             await asyncio.wait_for(first_connect, timeout=timeout)
         except asyncio.TimeoutError as e:
             _LOGGER.debug("MQTT: connection timed out (timeout=%.0fs)", timeout)
+            # Retrieve any raced exception to silence asyncio's "never retrieved" warning
+            if first_connect.done() and not first_connect.cancelled():
+                first_connect.exception()
             self.stop_mqtt()
             raise MqttTimeoutError("MQTT connection timeout") from e
         except MqttConnectError:
@@ -762,20 +775,22 @@ class OlarmFlowClient:
                         return
                     self._mqtt_retries += 1
                     reason = str(err)
-                    if self._mqtt_retries >= self._mqtt_retries_before_disconnect:
+                    info = self._mqtt_error_info(err)
+                    # Report "disconnected" once at the threshold; later failures stay "reconnecting"
+                    if self._mqtt_retries == self._mqtt_retries_before_disconnect:
                         _LOGGER.error(
                             "MQTT: connection lost (retries=%d): %s",
                             self._mqtt_retries,
                             reason,
                         )
-                        self._call_status_callback("disconnected", {"reason": reason})
+                        self._call_status_callback("disconnected", info)
                     else:
                         _LOGGER.debug(
                             "MQTT: connection lost, reconnecting (retries=%d): %s",
                             self._mqtt_retries,
                             reason,
                         )
-                        self._call_status_callback("reconnecting", {"reason": reason})
+                        self._call_status_callback("reconnecting", info)
                     delay = min(
                         MQTT_RECONNECT_BACKOFF_MIN * 2 ** (self._mqtt_retries - 1),
                         MQTT_RECONNECT_BACKOFF_MAX,
@@ -809,6 +824,24 @@ class OlarmFlowClient:
             if rc in {4, 5, 134, 135}:
                 return MqttAuthError(f"MQTT authentication failed: {err}")
         return MqttConnectError(f"MQTT connection failed: {err}")
+
+    @classmethod
+    def _mqtt_error_info(cls, err: aiomqtt.MqttError) -> dict[str, Any]:
+        """Build the status callback info dict for a connection failure.
+
+        Includes ``reason`` (free text), ``rc`` (CONNACK reason code, or None
+        for non-CONNACK errors such as network drops) and ``auth`` (True if
+        the failure was an authentication/authorization refusal, e.g. an
+        expired access token).
+        """
+        rc = None
+        if isinstance(err, aiomqtt.MqttCodeError):
+            rc = getattr(err.rc, "value", err.rc)
+        return {
+            "reason": str(err),
+            "rc": rc,
+            "auth": isinstance(cls._map_mqtt_error(err), MqttAuthError),
+        }
 
     def stop_mqtt(self) -> None:
         """Stop and disconnect MQTT.
@@ -871,9 +904,13 @@ class OlarmFlowClient:
         loop = self._event_loop
         if client is not None and loop is not None:
             _LOGGER.debug("MQTT: subscribing (topic=%s)", topic)
-            loop.call_soon_threadsafe(
-                lambda: loop.create_task(self._mqtt_subscribe_now(client, topic))
-            )
+
+            def _schedule() -> None:
+                task = loop.create_task(self._mqtt_subscribe_now(client, topic))
+                self._mqtt_bg_tasks.add(task)
+                task.add_done_callback(self._mqtt_bg_tasks.discard)
+
+            loop.call_soon_threadsafe(_schedule)
         else:
             _LOGGER.debug(
                 "MQTT: subscription queued until client connects (topic=%s)", topic
@@ -886,6 +923,8 @@ class OlarmFlowClient:
         except aiomqtt.MqttError as err:
             # The reconnect loop re-subscribes on the next connect
             _LOGGER.debug("MQTT: live subscribe failed (topic=%s): %s", topic, err)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("MQTT: unexpected error subscribing (topic=%s)", topic)
 
     def _mqtt_dispatch(self, topic: str, payload: Any) -> None:
         """Decode a message payload and dispatch it to the registered callback."""
