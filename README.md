@@ -49,11 +49,11 @@ python examples/fetch_devices.py --api-token YOUR_API_TOKEN
 python examples/fetch_device.py --api-token YOUR_API_TOKEN --device-id DEVICE_ID
 
 # Run the MQTT events listener example
-python examples/subscribe_device_mqtt.py --api-token YOUR_API_TOKEN --user-id YOUR_USER_ID
+python examples/subscribe_devices_mqtt.py --api-token YOUR_API_TOKEN --user-id YOUR_USER_ID
 ```
 NOTE: you can find your User ID in the Olarm user portal
 
-This library provides asynchronous access using `aiohttp` for API calls and `paho-mqtt` for real-time event handling via MQTT.
+This library provides asynchronous access using `aiohttp` for API calls and `aiomqtt` for real-time event handling via MQTT.
 
 ## Development
 

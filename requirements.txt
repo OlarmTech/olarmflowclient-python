@@ -1,5 +1,5 @@
 aiohttp>=3.9.0
-paho-mqtt>=2.1.0
+aiomqtt>=2.4.0
 
 # Testing dependencies (not required for production)
 pytest>=7.0.0

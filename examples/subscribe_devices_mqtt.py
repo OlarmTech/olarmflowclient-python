@@ -44,17 +44,14 @@ async def main(api_token):
                 _LOGGER.error("No user ID found in devices result")
                 return
 
-            # Connect to MQTT broker (using client_id_suffix="5" to avoid conflicts if user is already setup a client)
+            # Connect to MQTT broker (using client_id_suffix="4" to avoid conflicts if user has already set up a client)
             _LOGGER.info("Connecting to MQTT broker...")
             try:
-                client.start_mqtt(user_id, client_id_suffix="4")
+                await client.start_mqtt_async(user_id, client_id_suffix="4")
                 _LOGGER.info("Successfully connected to MQTT broker")
             except MqttConnectError as e:
                 _LOGGER.error(f"Failed to connect to MQTT: {e}")
                 return
-
-            # wait a few seconds to give the client time to connect
-            await asyncio.sleep(3)
 
             # Subscribe to Device Events (first 8 of them)
             for device in devices[:8]:
