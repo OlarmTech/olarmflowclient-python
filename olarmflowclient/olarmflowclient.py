@@ -266,6 +266,7 @@ class OlarmFlowClient:
         ) = None
         self._mqtt_retries: int = 0
         self._mqtt_retries_before_disconnect: int = mqtt_retries_before_disconnect
+        self._mqtt_tls_context: ssl.SSLContext | None = None
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
     async def __aenter__(self) -> "OlarmFlowClient":
@@ -683,6 +684,7 @@ class OlarmFlowClient:
         user_id: str,
         client_id_suffix: str | None = "1",
         timeout: float = 30.0,
+        tls_context: ssl.SSLContext | None = None,
     ) -> None:
         """Start the MQTT client and wait for the first connection.
 
@@ -696,6 +698,8 @@ class OlarmFlowClient:
             user_id: Olarm user id, used to build the MQTT client id.
             client_id_suffix: Suffix for the MQTT client id.
             timeout: Seconds to wait for the first connection.
+            tls_context: Optional SSL context; a default one is built in a
+                worker thread if omitted.
 
         Raises:
             MqttAuthError: If the broker refuses the connection due to bad
@@ -719,6 +723,14 @@ class OlarmFlowClient:
         self._event_loop = loop
         self._mqtt_clientId = f"{user_id}-{client_id_suffix}"
         self._mqtt_retries = 0
+
+        if tls_context is not None:
+            self._mqtt_tls_context = tls_context
+        elif self._mqtt_tls_context is None:
+            # Loading CA certs blocks, so build the context off the event loop
+            self._mqtt_tls_context = await loop.run_in_executor(
+                None, ssl.create_default_context
+            )
 
         _LOGGER.debug(
             "MQTT: starting client over websockets (client_id=%s, host=%s, port=%s)",
@@ -809,7 +821,7 @@ class OlarmFlowClient:
             identifier=self._mqtt_clientId,
             transport="websockets",
             websocket_path="/mqtt",
-            tls_context=ssl.create_default_context(),
+            tls_context=self._mqtt_tls_context,
             keepalive=MQTT_KEEPALIVE,
         )
 
