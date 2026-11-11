@@ -388,6 +388,7 @@ class OlarmFlowClient:
         action_cmd: str,
         action_num: int,
         prolink_id: str | None = None,
+        node_device_id: str | None = None,
     ) -> dict[str, Any]:
         """Send an action command to a device or prolink."""
         if prolink_id is not None:
@@ -397,10 +398,14 @@ class OlarmFlowClient:
                 jsonBody={"actionCmd": action_cmd, "actionNum": action_num},
             )
 
+        body: dict[str, Any] = {"actionCmd": action_cmd, "actionNum": action_num}
+        if node_device_id is not None:
+            body["nodeDeviceId"] = node_device_id
+
         return await self._api_make_request(
             "POST",
             f"/api/v4/devices/{device_id}/actions",
-            jsonBody={"actionCmd": action_cmd, "actionNum": action_num},
+            jsonBody=body,
         )
 
     def _handle_api_error(self, err: OlarmFlowClientApiError) -> None:
@@ -674,6 +679,62 @@ class OlarmFlowClient:
     ) -> dict[str, Any]:
         """Pulse an Olarm MAX output."""
         return await self._api_send_action(device_id, "max-io-pulse", output_num)
+
+    async def send_device_hub_io_latch_on(
+        self, device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Latch on an Olarm ONE HUB IO."""
+        return await self._api_send_action(device_id, "hub-io-latch-on", io_num)
+
+    async def send_device_hub_io_latch_off(
+        self, device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Latch off an Olarm ONE HUB IO."""
+        return await self._api_send_action(device_id, "hub-io-latch-off", io_num)
+
+    async def send_device_hub_io_toggle(
+        self, device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Toggle an Olarm ONE HUB IO."""
+        return await self._api_send_action(device_id, "hub-io-toggle", io_num)
+
+    async def send_device_hub_io_pulse(
+        self, device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Pulse an Olarm ONE HUB IO."""
+        return await self._api_send_action(device_id, "hub-io-pulse", io_num)
+
+    async def send_device_node_io_latch_on(
+        self, device_id: str, node_device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Latch on an IO on an Olarm ONE node (Olarm CONNECT / Olarm ENTRY)."""
+        return await self._api_send_action(
+            device_id, "node-io-latch-on", io_num, node_device_id=node_device_id
+        )
+
+    async def send_device_node_io_latch_off(
+        self, device_id: str, node_device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Latch off an IO on an Olarm ONE node (Olarm CONNECT / Olarm ENTRY)."""
+        return await self._api_send_action(
+            device_id, "node-io-latch-off", io_num, node_device_id=node_device_id
+        )
+
+    async def send_device_node_io_toggle(
+        self, device_id: str, node_device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Toggle an IO on an Olarm ONE node (Olarm CONNECT / Olarm ENTRY)."""
+        return await self._api_send_action(
+            device_id, "node-io-toggle", io_num, node_device_id=node_device_id
+        )
+
+    async def send_device_node_io_pulse(
+        self, device_id: str, node_device_id: str, io_num: int
+    ) -> dict[str, Any]:
+        """Pulse an IO on an Olarm ONE node (Olarm CONNECT / Olarm ENTRY)."""
+        return await self._api_send_action(
+            device_id, "node-io-pulse", io_num, node_device_id=node_device_id
+        )
 
     async def send_user_panic(self, device_id: str) -> dict[str, Any]:
         """Send User Panic."""
