@@ -541,6 +541,69 @@ class TestOlarmFlowClient:
             assert result == expected_result
             mock_action.assert_called_once_with(device_id, action_cmd, action_num)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name,action_cmd",
+        [
+            ("send_device_hub_io_latch_on", "hub-io-latch-on"),
+            ("send_device_hub_io_latch_off", "hub-io-latch-off"),
+            ("send_device_hub_io_toggle", "hub-io-toggle"),
+            ("send_device_hub_io_pulse", "hub-io-pulse"),
+        ],
+    )
+    async def test_hub_io_actions_send_no_node_device_id(
+        self, access_token, device_id, method_name, action_cmd
+    ):
+        """HUB IO actions post the action for the IO number only."""
+        client = OlarmFlowClient(access_token)
+        expected_result = {"actionStatus": "OK"}
+
+        with patch.object(
+            client, "_api_make_request", return_value=expected_result
+        ) as mock_request:
+            result = await getattr(client, method_name)(device_id, 2)
+
+            assert result == expected_result
+            mock_request.assert_called_once_with(
+                "POST",
+                f"/api/v4/devices/{device_id}/actions",
+                jsonBody={"actionCmd": action_cmd, "actionNum": 2},
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name,action_cmd",
+        [
+            ("send_device_node_io_latch_on", "node-io-latch-on"),
+            ("send_device_node_io_latch_off", "node-io-latch-off"),
+            ("send_device_node_io_toggle", "node-io-toggle"),
+            ("send_device_node_io_pulse", "node-io-pulse"),
+        ],
+    )
+    async def test_node_io_actions_send_node_device_id(
+        self, access_token, device_id, method_name, action_cmd
+    ):
+        """Node IO actions post to the HUB device with the node in the body."""
+        client = OlarmFlowClient(access_token)
+        expected_result = {"actionStatus": "OK"}
+        node_device_id = "abc51198-e7d8-4f90-9328-40439bf9e5c6"
+
+        with patch.object(
+            client, "_api_make_request", return_value=expected_result
+        ) as mock_request:
+            result = await getattr(client, method_name)(device_id, node_device_id, 1)
+
+            assert result == expected_result
+            mock_request.assert_called_once_with(
+                "POST",
+                f"/api/v4/devices/{device_id}/actions",
+                jsonBody={
+                    "actionCmd": action_cmd,
+                    "actionNum": 1,
+                    "nodeDeviceId": node_device_id,
+                },
+            )
+
     def test_mqtt_connect_error(self):
         """Test MqttConnectError initialization and inheritance."""
         error = MqttConnectError()

@@ -13,6 +13,7 @@ For more information about our Olarm Public API, please see our official API doc
 
 *   Fetch your devices information and state
 *   Send commands to devices (arm, disarm, stay, sleep, bypass zones, control PGM etc..).
+*   Control Olarm MAX outputs, and Olarm ONE HUB and node (Olarm CONNECT / Olarm ENTRY) IOs.
 *   Subscribe to real-time state changes and events using MQTT
 
 ## Quick Start
